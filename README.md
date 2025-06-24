@@ -1,5 +1,7 @@
 # Installation
 
-cd /your/repo/
-npm install
-npm start
+---> cd /your/repo/
+
+---> npm install
+
+---> npm start
