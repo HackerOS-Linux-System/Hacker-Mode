@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hacker Mode</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header class="header flex justify-between items-center px-6 py-4">
+        <div class="text-2xl font-bold">Hacker Mode</div>
+        <img src="file:///usr/share/HackerOS/ICONS/Hacker-Mode.png" alt="Hacker Mode Logo" class="h-12">
+    </header>
+    <div class="flex flex-1 overflow-hidden">
+        <nav class="sidebar w-1/5 p-6 flex flex-col space-y-4">
+            <div class="nav-item cursor-pointer" data-index="0" data-section="library">
+                <i class="fas fa-book"></i>
+                <span>Biblioteka</span>
+            </div>
+            <div class="nav-item cursor-pointer" data-index="1" data-section="settings">
+                <i class="fas fa-cog"></i>
+                <span>Ustawienia</span>
+            </div>
+            <div class="nav-item cursor-pointer" data-index="2" data-section="hacker-menu">
+                <i class="fas fa-terminal"></i>
+                <span>Hacker Menu</span>
+            </div>
+        </nav>
+        <main class="flex-1 p-8 overflow-y-auto">
+            <div id="library" class="content-section active">
+                <h1 class="text-4xl mb-8">Twoje Launchery</h1>
+                <div class="grid grid-cols-3 gap-6">
+                    <div class="launcher-button cursor-pointer" data-index="3" data-action="launch" data-launcher="steam">
+                        <i class="fab fa-steam"></i>
+                        Steam
+                    </div>
+                    <div class="launcher-button cursor-pointer" data-index="4" data-action="launch" data-launcher="hyperplay">
+                        <i class="fas fa-play-circle"></i>
+                        HyperPlay
+                    </div>
+                    <div class="launcher-button cursor-pointer" data-index="5" data-action="launch" data-launcher="lutris">
+                        <i class="fas fa-gamepad"></i>
+                        Lutris
+                    </div>
+                    <div class="launcher-button cursor-pointer" data-index="6" data-action="launch" data-launcher="heroic">
+                        <i class="fas fa-shield-alt"></i>
+                        Heroic Games
+                    </div>
+                    <div class="launcher-button cursor-pointer" data-index="7" data-action="launch" data-launcher="gamehub">
+                        <i class="fas fa-hub"></i>
+                        GameHub
+                    </div>
+                    <div class="launcher-button cursor-pointer" data-index="8" data-action="launch" data-launcher="sober">
+                        <i class="fas fa-rocket"></i>
+                        Sober
+                    </div>
+                </div>
+            </div>
+            <div id="settings" class="content-section store-content">
+                <h1 class="text-4xl mb-8">Ustawienia</h1>
+                <div class="settings-grid">
+                    <div class="settings-card">
+                        <h2 class="text-xl mb-4 font-bold">Dźwięk</h2>
+                        <div class="control-group">
+                            <label for="volume-slider" class="text-xl mb-2">Głośność</label>
+                            <input type="range" min="0" max="100" value="50" class="slider" id="volume-slider" data-index="9">
+                            <span id="volume-value" class="text-sm mt-2">50%</span>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h2 class="text-xl mb-4 font-bold">Jasność</h2>
+                        <div class="control-group">
+                            <label for="brightness-slider" class="text-xl mb-2">Jasność</label>
+                            <input type="range" min="10" max="100" value="50" class="slider" id="brightness-slider" data-index="10">
+                            <span id="brightness-value" class="text-sm mt-2">50%</span>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h2 class="text-xl mb-4 font-bold">Sieć (Wi-Fi)</h2>
+                        <div class="control-group">
+                            <div class="toggle-group">
+                                <label class="toggle">
+                                    <input type="checkbox" id="wifi-toggle" data-index="11">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="ml-2 text-xl">Włącz Wi-Fi</span>
+                            </div>
+                            <select id="wifi-networks" class="select-input mt-4" data-index="12">
+                                <option value="0">Wybierz...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h2 class="text-xl mb-4 font-bold">Bluetooth</h2>
+                        <div class="control-group">
+                            <div class="toggle-group">
+                                <label class="toggle">
+                                    <input type="checkbox" id="bluetooth-toggle" data-index="13">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="ml-2 text-xl">Włącz Bluetooth</span>
+                            </div>
+                            <select id="bluetooth-devices" class="select-input mt-4" data-index="14">
+                                <option value="0">Wybierz...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="hacker-menu" class="content-section store-content">
+                <h1 class="text-4xl mb-8">Hacker Menu</h1>
+                <p class="text-gray-300">Opcje systemowe dostępne po kliknięciu przycisku w menu bocznym.</p>
+            </div>
+        </main>
+    </div>
+    <script>
+        if (!window.electronAPI) {
+            console.error('electronAPI is not defined. Ensure preload.js is loaded correctly.');
+            document.getElementById('volume-value').textContent = '50%';
+            document.getElementById('brightness-value').textContent = '50%';
+            document.getElementById('wifi-networks').innerHTML = '<option value="0">Błąd ładowania sieci</option>';
+            document.getElementById('bluetooth-devices').innerHTML = '<option value="0">Błąd ładowania urządzeń</option>';
+        }
+
+        let currentFocus = null;
+        let navItems = document.querySelectorAll('.nav-item');
+        let launcherButtons = document.querySelectorAll('.launcher-button');
+        let sliders = document.querySelectorAll('.slider');
+        let toggles = document.querySelectorAll('.toggle input');
+        let selects = document.querySelectorAll('select');
+        let allFocusable = [...navItems, ...launcherButtons, ...sliders, ...toggles, ...selects];
+        let currentIndex = 0;
+        let currentSection = 'library';
+
+        function setFocus(element) {
+            if (currentFocus) {
+                currentFocus.classList.remove('focused');
+                if (currentFocus.tagName === 'INPUT' || currentFocus.tagName === 'SELECT') {
+                    currentFocus.blur();
+                }
+            }
+            currentFocus = element;
+            currentFocus.classList.add('focused');
+            currentFocus.focus();
+            currentFocus.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function switchSection(sectionId) {
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.getElementById(sectionId).classList.add('active');
+            currentSection = sectionId;
+            launcherButtons = document.querySelectorAll(`#${sectionId} .launcher-button`);
+            sliders = document.querySelectorAll(`#${sectionId} .slider`);
+            toggles = document.querySelectorAll(`#${sectionId} .toggle input`);
+            selects = document.querySelectorAll(`#${sectionId} select`);
+            allFocusable = [...navItems, ...launcherButtons, ...sliders, ...toggles, ...selects];
+            currentIndex = Math.min(currentIndex, allFocusable.length - 1);
+            setFocus(allFocusable[currentIndex]);
+        }
+
+        function createRipple(event) {
+            const button = event.currentTarget;
+            const ripple = document.createElement('span');
+            ripple.classList.add('ripple');
+            const rect = button.getBoundingClientRect();
+            const size = Math.max(rect.width, rect.height);
+            ripple.style.width = ripple.style.height = `${size}px`;
+            ripple.style.left = `${event.clientX - rect.left - size / 2}px`;
+            ripple.style.top = `${event.clientY - rect.top - size / 2}px`;
+            button.appendChild(ripple);
+            setTimeout(() => ripple.remove(), 600);
+        }
+
+        function handleGamepadInput() {
+            window.addEventListener('gamepadconnected', (e) => {
+                console.log('Gamepad connected:', e.gamepad);
+                let lastInputTime = 0;
+                const inputDelay = 150;
+                setInterval(() => {
+                    const gamepads = navigator.getGamepads();
+                    const gamepad = gamepads[0];
+                    if (!gamepad) return;
+                    const currentTime = Date.now();
+                    if (currentTime - lastInputTime < inputDelay) return;
+
+                    const xAxis = gamepad.axes[0];
+                    const yAxis = gamepad.axes[1];
+                    const threshold = 0.5;
+
+                    if (yAxis < -threshold && currentIndex > 0) {
+                        currentIndex--;
+                        setFocus(allFocusable[currentIndex]);
+                        lastInputTime = currentTime;
+                    } else if (yAxis > threshold && currentIndex < allFocusable.length - 1) {
+                        currentIndex++;
+                        setFocus(allFocusable[currentIndex]);
+                        lastInputTime = currentTime;
+                    } else if (xAxis < -threshold && currentIndex > 0) {
+                        currentIndex--;
+                        setFocus(allFocusable[currentIndex]);
+                        lastInputTime = currentTime;
+                    } else if (xAxis > threshold && currentIndex < allFocusable.length - 1) {
+                        currentIndex++;
+                        setFocus(allFocusable[currentIndex]);
+                        lastInputTime = currentTime;
+                    }
+
+                    if (gamepad.buttons[0].pressed) {
+                        currentFocus.click();
+                        lastInputTime = currentTime;
+                    }
+                }, 50);
+            });
+        }
+
+        function handleKeyboardInput() {
+            document.addEventListener('keydown', (e) => {
+                let lastInputTime = 0;
+                const inputDelay = 150;
+                const currentTime = Date.now();
+                if (currentTime - lastInputTime < inputDelay) return;
+
+                switch (e.key) {
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        if (currentIndex > 0) {
+                            currentIndex--;
+                            setFocus(allFocusable[currentIndex]);
+                        }
+                        lastInputTime = currentTime;
+                        break;
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        if (currentIndex < allFocusable.length - 1) {
+                            currentIndex++;
+                            setFocus(allFocusable[currentIndex]);
+                        }
+                        lastInputTime = currentTime;
+                        break;
+                    case 'ArrowLeft':
+                        e.preventDefault();
+                        if (currentIndex > 0) {
+                            currentIndex--;
+                            setFocus(allFocusable[currentIndex]);
+                        }
+                        lastInputTime = currentTime;
+                        break;
+                    case 'ArrowRight':
+                        e.preventDefault();
+                        if (currentIndex < allFocusable.length - 1) {
+                            currentIndex++;
+                            setFocus(allFocusable[currentIndex]);
+                        }
+                        lastInputTime = currentTime;
+                        break;
+                    case 'Enter':
+                        e.preventDefault();
+                        currentFocus.click();
+                        lastInputTime = currentTime;
+                        break;
+                }
+            });
+        }
+
+        const volumeSlider = document.getElementById('volume-slider');
+        const volumeValue = document.getElementById('volume-value');
+        volumeSlider.addEventListener('input', () => {
+            const value = volumeSlider.value;
+            volumeValue.textContent = `${value}%`;
+            if (window.electronAPI) {
+                window.electronAPI.send('set-volume', value);
+            } else {
+                console.warn('electronAPI not available, cannot set volume');
+            }
+        });
+
+        const brightnessSlider = document.getElementById('brightness-slider');
+        const brightnessValue = document.getElementById('brightness-value');
+        brightnessSlider.addEventListener('input', () => {
+            const value = brightnessSlider.value;
+            brightnessValue.textContent = `${value}%`;
+            if (window.electronAPI) {
+                window.electronAPI.send('set-brightness', value);
+            } else {
+                console.warn('electronAPI not available, cannot set brightness');
+            }
+        });
+
+        const wifiToggle = document.getElementById('wifi-toggle');
+        wifiToggle.addEventListener('change', () => {
+            if (window.electronAPI) {
+                window.electronAPI.send('toggle-wifi', wifiToggle.checked);
+                updateWifiNetworks();
+            } else {
+                console.warn('electronAPI not available, cannot toggle Wi-Fi');
+            }
+        });
+
+        const bluetoothToggle = document.getElementById('bluetooth-toggle');
+        bluetoothToggle.addEventListener('change', () => {
+            if (window.electronAPI) {
+                window.electronAPI.send('toggle-bluetooth', bluetoothToggle.checked);
+                updateBluetoothDevices();
+            } else {
+                console.warn('electronAPI not available, cannot toggle Bluetooth');
+            }
+        });
+
+        const wifiNetworks = document.getElementById('wifi-networks');
+        wifiNetworks.addEventListener('change', () => {
+            const selectedSsid = wifiNetworks.value;
+            if (selectedSsid !== '0' && window.electronAPI) {
+                window.electronAPI.send('connect-wifi', selectedSsid);
+            } else if (!window.electronAPI) {
+                console.warn('electronAPI not available, cannot connect to Wi-Fi');
+            }
+        });
+
+        function updateWifiNetworks() {
+            if (window.electronAPI) {
+                window.electronAPI.send('get-wifi-list', null);
+            } else {
+                console.warn('electronAPI not available, cannot fetch Wi-Fi list');
+                wifiNetworks.innerHTML = '<option value="0">Błąd ładowania sieci</option>';
+            }
+        }
+
+        function updateBluetoothDevices() {
+            if (window.electronAPI) {
+                window.electronAPI.send('get-bluetooth-list', null);
+            } else {
+                console.warn('electronAPI not available, cannot fetch Bluetooth list');
+                bluetoothDevices.innerHTML = '<option value="0">Błąd ładowania urządzeń</option>';
+            }
+        }
+
+        if (window.electronAPI && window.electronAPI.on) {
+            window.electronAPI.on('wifi-list', (list) => {
+                console.log('Received Wi-Fi list:', list);
+                wifiNetworks.innerHTML = '<option value="0">Wybierz...</option>';
+                if (Array.isArray(list)) {
+                    list.forEach(ssid => {
+                        const option = document.createElement('option');
+                        option.value = ssid;
+                        option.text = ssid;
+                        wifiNetworks.appendChild(option);
+                    });
+                } else {
+                    wifiNetworks.innerHTML = '<option value="0">Brak sieci</option>';
+                }
+            });
+
+            window.electronAPI.on('bluetooth-list', (list) => {
+                console.log('Received Bluetooth list:', list);
+                bluetoothDevices.innerHTML = '<option value="0">Wybierz...</option>';
+                if (Array.isArray(list)) {
+                    list.forEach(device => {
+                        const option = document.createElement('option');
+                        option.value = device.id;
+                        option.text = device.name || device.id;
+                        bluetoothDevices.appendChild(option);
+                    });
+                } else {
+                    bluetoothDevices.innerHTML = '<option value="0">Brak urządzeń</option>';
+                }
+            });
+
+            window.electronAPI.on('initial-settings', (settings) => {
+                console.log('Received initial settings:', settings);
+                if (settings) {
+                    volumeSlider.value = settings.volume || 50;
+                    volumeValue.textContent = `${settings.volume || 50}%`;
+                    brightnessSlider.value = settings.brightness || 50;
+                    brightnessValue.textContent = `${settings.brightness || 50}%`;
+                    wifiToggle.checked = settings.wifi || false;
+                    bluetoothToggle.checked = settings.bluetooth || false;
+                }
+            });
+
+            window.electronAPI.send('get-initial-settings', null);
+        } else {
+            console.error('electronAPI or electronAPI.on is not defined, skipping IPC listeners');
+            document.getElementById('volume-value').textContent = '50%';
+            document.getElementById('brightness-value').textContent = '50%';
+            document.getElementById('wifi-networks').innerHTML = '<option value="0">Błąd ładowania sieci</option>';
+            document.getElementById('bluetooth-devices').innerHTML = '<option value="0">Błąd ładowania urządzeń</option>';
+        }
+
+        allFocusable.forEach((item, index) => {
+            item.addEventListener('mousedown', (e) => {
+                if (item.classList.contains('nav-item')) {
+                    createRipple(e);
+                    const section = item.getAttribute('data-section');
+                    if (section === 'hacker-menu' && window.electronAPI) {
+                        window.electronAPI.send('show-hacker-menu', null);
+                    } else {
+                        switchSection(section);
+                    }
+                } else if (item.classList.contains('launcher-button')) {
+                    createRipple(e);
+                    if (item.getAttribute('data-action') === 'launch' && window.electronAPI) {
+                        const launcher = item.getAttribute('data-launcher');
+                        window.electronAPI.send('launch-app', launcher);
+                    }
+                }
+            });
+
+            item.addEventListener('mouseover', () => {
+                currentIndex = index;
+                setFocus(item);
+            });
+        });
+
+        setFocus(allFocusable[0]);
+        handleGamepadInput();
+        handleKeyboardInput();
+    </script>
+</body>
+</html>
