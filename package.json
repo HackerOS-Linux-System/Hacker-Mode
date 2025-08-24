@@ -1,0 +1,35 @@
+{
+  "name": "hacker-mode",
+  "version": "1.0.0",
+  "description": "HackerMode - aplikacja Electron na Linux",
+  "author": "Twoje Imię <email@example.com>",
+  "homepage": "https://github.com/TwojeRepozytorium/HackerMode",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^25.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.voidarc.hackermode",
+    "productName": "HackerMode",
+    "files": [
+      "**/*"
+    ],
+    "asar": true,
+    "directories": {
+      "buildResources": "assets"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    }
+  }
+}
