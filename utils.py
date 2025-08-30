@@ -1,12 +1,9 @@
-const fs = require('fs');
-const os = require('os');
+import os
+import logging
 
-let lang = 'en';
-let enableGamescope = false;
-let enableMangohud = false;
-let enableVkbasalt = false;
+logging.basicConfig(filename='/tmp/hacker-mode.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-const translations = {
+translations = {
     'en': {
         'title': 'Hacker Mode',
         'settings': 'Settings',
@@ -39,11 +36,6 @@ const translations = {
         'app_not_installed': 'To install missing applications, use the package manager.',
         'launch_cooldown': 'Please wait {seconds} seconds before launching {app} again.',
         'no_internet': 'No internet connection. Please enable Wi-Fi.',
-        'wifi_list': 'Available Wi-Fi Networks',
-        'connect': 'Connect',
-        'bluetooth_devices': 'Bluetooth Devices',
-        'scan': 'Scan',
-        'pair': 'Pair',
         'no_networks': 'No networks found',
         'connection_failed': 'Connection failed: {error}',
         'connecting': 'Connecting to {ssid}...',
@@ -52,7 +44,6 @@ const translations = {
         'no_selection': 'Please select an item',
         'pairing': 'Pairing {device}...',
         'pairing_failed': 'Pairing failed: {error}',
-        'switch_plasma': 'Switch to Plasma',
         'switch_to_plasma': 'Switch to Plasma',
         'shutdown': 'Shutdown',
         'restart': 'Restart',
@@ -60,7 +51,10 @@ const translations = {
         'restart_apps': 'Restart Apps',
         'restart_sway': 'Restart Sway',
         'close': 'Close',
-        'back': 'Back'
+        'back': 'Back',
+        'connect': 'Connect',
+        'scan': 'Scan',
+        'pair': 'Pair'
     },
     'pl': {
         'title': 'Tryb Hakera',
@@ -94,11 +88,6 @@ const translations = {
         'app_not_installed': 'Aby zainstalować brakujące aplikacje, użyj menedżera pakietów.',
         'launch_cooldown': 'Proszę czekać {seconds} sekund przed ponownym uruchomieniem {app}.',
         'no_internet': 'Brak połączenia z internetem. Proszę włączyć Wi-Fi.',
-        'wifi_list': 'Dostępne sieci Wi-Fi',
-        'connect': 'Połącz',
-        'bluetooth_devices': 'Urządzenia Bluetooth',
-        'scan': 'Skanuj',
-        'pair': 'Paruj',
         'no_networks': 'Nie znaleziono sieci',
         'connection_failed': 'Połączenie nieudane: {error}',
         'connecting': 'Łączenie z {ssid}...',
@@ -107,7 +96,6 @@ const translations = {
         'no_selection': 'Proszę wybrać element',
         'pairing': 'Parowanie {device}...',
         'pairing_failed': 'Parowanie nieudane: {error}',
-        'switch_plasma': 'Przełącz na Plasma',
         'switch_to_plasma': 'Przełącz na Plasma',
         'shutdown': 'Wyłącz',
         'restart': 'Uruchom ponownie',
@@ -115,54 +103,49 @@ const translations = {
         'restart_apps': 'Restartuj aplikacje',
         'restart_sway': 'Restartuj sesję Sway',
         'close': 'Zamknij',
-        'back': 'Wróć'
-    }
-};
-
-function setupLanguage() {
-    try {
-        const locale = os.locale || process.env.LANG || 'en_US';
-        lang = locale.split('_')[0];
-        if (!translations[lang]) lang = 'en';
-        log(`Language set to: ${lang}`);
-    } catch (e) {
-        log(`Error setting language: ${e}`, 'error');
-        lang = 'en';
-    }
-    return lang;
-}
-
-function setLanguage(newLang) {
-    if (translations[newLang]) {
-        lang = newLang;
-        log(`Language changed to: ${newLang}`, 'info');
+        'back': 'Wróć',
+        'connect': 'Połącz',
+        'scan': 'Skanuj',
+        'pair': 'Paruj'
     }
 }
 
-function getText(key, params = {}) {
-    let text = translations[lang][key] || key;
-    for (const [k, v] of Object.entries(params)) {
-        text = text.replace(`{${k}}`, v);
-    }
-    return text;
-}
+lang = 'en'
+enable_gamescope = False
+enable_mangohud = False
+enable_vkbasalt = False
 
-function setGamingTool(tool, enabled) {
-    if (tool === 'gamescope') enableGamescope = enabled;
-    if (tool === 'mangohud') enableMangohud = enabled;
-    if (tool === 'vkbasalt') enableVkbasalt = enabled;
-}
+def setup_language():
+    global lang
+    try:
+        locale = os.environ.get('LANG', 'en_US').split('.')[0].split('_')[0]
+        lang = locale if locale in translations else 'en'
+        logging.info(f'Language set to: {lang}')
+    except Exception as e:
+        logging.error(f'Error setting language: {e}')
+        lang = 'en'
+    return lang
 
-function getGamingTool(tool) {
-    if (tool === 'gamescope') return enableGamescope;
-    if (tool === 'mangohud') return enableMangohud;
-    if (tool === 'vkbasalt') return enableVkbasalt;
-    return false;
-}
+def set_language(new_lang):
+    global lang
+    if new_lang in translations:
+        lang = new_lang
+        logging.info(f'Language changed to: {new_lang}')
 
-function log(message, level = 'info') {
-    const logMessage = `${new Date().toISOString()} - ${level.toUpperCase()} - ${message}\n`;
-    fs.appendFileSync('/tmp/hacker-mode.log', logMessage);
-}
+def get_text(key, params=None):
+    if params is None:
+        params = {}
+    text = translations.get(lang, {}).get(key, key)
+    for k, v in params.items():
+        text = text.replace(f'{{{k}}}', str(v))
+    return text
 
-module.exports = { setupLanguage, setLanguage, getText, setGamingTool, getGamingTool };
+def set_gaming_tool(tool, enabled):
+    global enable_gamescope, enable_mangohud, enable_vkbasalt
+    if tool == 'gamescope':
+        enable_gamescope = enabled
+    elif tool == 'mangohud':
+        enable_mangohud = enabled
+    elif tool == 'vkbasalt':
+        enable_vkbasalt = enabled
+    logging.info(f'Toggled {tool} to {enabled}')
