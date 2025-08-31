@@ -498,5 +498,3 @@ class SettingsWindow(QMainWindow):
         except Exception as e:
             logging.error(f'Error during close event: {e}')
 
-</body>
-</html>
