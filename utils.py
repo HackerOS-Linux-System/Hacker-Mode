@@ -1,17 +1,52 @@
-import os
 import logging
+import os
+import getpass
 
-logging.basicConfig(filename='/tmp/hacker-mode.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Get the current user's home directory
+user_home = os.path.expanduser('~')
 
+# Set up logging to a user-writable directory
+log_dir = os.path.join(user_home, '.hackeros')
+log_file = os.path.join(log_dir, 'hacker-mode.log')
+
+# Ensure the log directory exists and is writable
+try:
+    os.makedirs(log_dir, exist_ok=True)
+    # Verify that the directory is writable
+    if not os.access(log_dir, os.W_OK):
+        raise PermissionError(f"No write permission for directory: {log_dir}")
+except PermissionError as e:
+    # Fallback to a temporary directory if the primary log directory is not writable
+    log_dir = os.path.join(os.path.expanduser('~'), '.cache', 'hackeros')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, 'hacker-mode.log')
+    logging.warning(f"Failed to use primary log directory due to: {e}. Using fallback: {log_file}")
+
+# Configure logging
+try:
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        filemode='a'  # Append mode to avoid overwriting
+    )
+except PermissionError as e:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]  # Fallback to console logging
+    )
+    logging.error(f"Failed to open log file {log_file}: {e}. Logging to console instead.")
+
+# Language setting
+lang = 'en'  # Default language
+
+# Translation dictionary
 translations = {
     'en': {
-        'title': 'Hacker Mode',
         'settings': 'Settings',
-        'hacker_menu': 'Hacker Menu',
-        'steam': 'Steam',
-        'heroic': 'Heroic',
-        'hyperplay': 'HyperPlay',
-        'lutris': 'Lutris',
+        'back': 'Back',
+        'close': 'Close',
         'audio': 'Audio',
         'increase_volume': 'Increase Volume',
         'decrease_volume': 'Decrease Volume',
@@ -19,7 +54,7 @@ translations = {
         'display': 'Display',
         'increase_brightness': 'Increase Brightness',
         'decrease_brightness': 'Decrease Brightness',
-        'toggle_theme': 'Toggle Dark/Light Mode',
+        'toggle_theme': 'Toggle Theme',
         'network': 'Network',
         'wifi_settings': 'Wi-Fi Settings',
         'toggle_wifi': 'Toggle Wi-Fi',
@@ -33,37 +68,34 @@ translations = {
         'enable_gamescope': 'Enable Gamescope',
         'enable_mangohud': 'Enable MangoHUD',
         'enable_vkbasalt': 'Enable vkBasalt',
-        'app_not_installed': 'To install missing applications, use the package manager.',
-        'launch_cooldown': 'Please wait {seconds} seconds before launching {app} again.',
-        'no_internet': 'No internet connection. Please enable Wi-Fi.',
+        'connect': 'Connect',
+        'scan': 'Scan',
+        'pair': 'Pair',
         'no_networks': 'No networks found',
-        'connection_failed': 'Connection failed: {error}',
-        'connecting': 'Connecting to {ssid}...',
-        'wifi_toggle_success': 'Wi-Fi turned {state}',
+        'no_selection': 'No network selected',
+        'connection_failed': 'Failed to connect: {error}',
+        'connecting': 'Connecting to {ssid}',
         'wifi_toggle_failed': 'Failed to toggle Wi-Fi: {error}',
-        'no_selection': 'Please select an item',
-        'pairing': 'Pairing {device}...',
-        'pairing_failed': 'Pairing failed: {error}',
+        'wifi_toggle_success': 'Wi-Fi turned {state}',
+        'pairing_failed': 'Failed to pair: {error}',
+        'pairing': 'Pairing with {device}',
+        'error_returning_to_main': 'Error returning to main window: {error}',
+        'app_not_installed': '{app} is not installed',
+        'no_internet': 'No internet connection available',
+        'launch_cooldown': 'Please wait {seconds} seconds before launching {app} again',
+        'title': 'HackerOS',
+        'hacker_menu': 'Hacker Menu',
         'switch_to_plasma': 'Switch to Plasma',
         'shutdown': 'Shutdown',
         'restart': 'Restart',
         'sleep': 'Sleep',
         'restart_apps': 'Restart Apps',
-        'restart_sway': 'Restart Sway',
-        'close': 'Close',
-        'back': 'Back',
-        'connect': 'Connect',
-        'scan': 'Scan',
-        'pair': 'Pair'
+        'restart_sway': 'Restart Wayfire'
     },
     'pl': {
-        'title': 'Tryb Hakera',
         'settings': 'Ustawienia',
-        'hacker_menu': 'Menu Hakera',
-        'steam': 'Steam',
-        'heroic': 'Heroic',
-        'hyperplay': 'HyperPlay',
-        'lutris': 'Lutris',
+        'back': 'Wróć',
+        'close': 'Zamknij',
         'audio': 'Dźwięk',
         'increase_volume': 'Zwiększ głośność',
         'decrease_volume': 'Zmniejsz głośność',
@@ -71,7 +103,7 @@ translations = {
         'display': 'Wyświetlacz',
         'increase_brightness': 'Zwiększ jasność',
         'decrease_brightness': 'Zmniejsz jasność',
-        'toggle_theme': 'Przełącz tryb ciemny/jasny',
+        'toggle_theme': 'Zmień motyw',
         'network': 'Sieć',
         'wifi_settings': 'Ustawienia Wi-Fi',
         'toggle_wifi': 'Włącz/Wyłącz Wi-Fi',
@@ -81,71 +113,53 @@ translations = {
         'balanced': 'Zrównoważony',
         'performance': 'Wydajność',
         'general': 'Ogólne',
-        'gaming_tools': 'Narzędzia do gier',
+        'gaming_tools': 'Narzędzia dla graczy',
         'enable_gamescope': 'Włącz Gamescope',
         'enable_mangohud': 'Włącz MangoHUD',
         'enable_vkbasalt': 'Włącz vkBasalt',
-        'app_not_installed': 'Aby zainstalować brakujące aplikacje, użyj menedżera pakietów.',
-        'launch_cooldown': 'Proszę czekać {seconds} sekund przed ponownym uruchomieniem {app}.',
-        'no_internet': 'Brak połączenia z internetem. Proszę włączyć Wi-Fi.',
+        'connect': 'Połącz',
+        'scan': 'Skanuj',
+        'pair': 'Paruj',
         'no_networks': 'Nie znaleziono sieci',
-        'connection_failed': 'Połączenie nieudane: {error}',
-        'connecting': 'Łączenie z {ssid}...',
-        'wifi_toggle_success': 'Wi-Fi przełączone na {state}',
+        'no_selection': 'Nie wybrano sieci',
+        'connection_failed': 'Nie udało się połączyć: {error}',
+        'connecting': 'Łączenie z {ssid}',
         'wifi_toggle_failed': 'Nie udało się przełączyć Wi-Fi: {error}',
-        'no_selection': 'Proszę wybrać element',
-        'pairing': 'Parowanie {device}...',
-        'pairing_failed': 'Parowanie nieudane: {error}',
+        'wifi_toggle_success': 'Wi-Fi przełączone na {state}',
+        'pairing_failed': 'Nie udało się sparować: {error}',
+        'pairing': 'Parowanie z {device}',
+        'error_returning_to_main': 'Błąd podczas powrotu do głównego okna: {error}',
+        'app_not_installed': '{app} nie jest zainstalowany',
+        'no_internet': 'Brak połączenia z internetem',
+        'launch_cooldown': 'Proszę czekać {seconds} sekund przed ponownym uruchomieniem {app}',
+        'title': 'HackerOS',
+        'hacker_menu': 'Menu Hakera',
         'switch_to_plasma': 'Przełącz na Plasma',
         'shutdown': 'Wyłącz',
         'restart': 'Uruchom ponownie',
         'sleep': 'Uśpij',
-        'restart_apps': 'Restartuj aplikacje',
-        'restart_sway': 'Restartuj sesję Sway',
-        'close': 'Zamknij',
-        'back': 'Wróć',
-        'connect': 'Połącz',
-        'scan': 'Skanuj',
-        'pair': 'Paruj'
+        'restart_apps': 'Uruchom ponownie aplikacje',
+        'restart_sway': 'Uruchom ponownie Wayfire'
     }
 }
 
-lang = 'en'
-enable_gamescope = False
-enable_mangohud = False
-enable_vkbasalt = False
+def get_text(key, params=None):
+    text = translations[lang].get(key, key)
+    if params:
+        return text.format(**params)
+    return text
 
-def setup_language():
-    global lang
-    try:
-        locale = os.environ.get('LANG', 'en_US').split('.')[0].split('_')[0]
-        lang = locale if locale in translations else 'en'
-        logging.info(f'Language set to: {lang}')
-    except Exception as e:
-        logging.error(f'Error setting language: {e}')
-        lang = 'en'
-    return lang
+def set_gaming_tool(tool, enabled):
+    logging.info(f'Setting {tool} to {"enabled" if enabled else "disabled"}')
 
 def set_language(new_lang):
     global lang
     if new_lang in translations:
         lang = new_lang
-        logging.info(f'Language changed to: {new_lang}')
+        logging.info(f'Language set to {lang}')
+    else:
+        logging.warning(f'Invalid language: {new_lang}')
 
-def get_text(key, params=None):
-    if params is None:
-        params = {}
-    text = translations.get(lang, {}).get(key, key)
-    for k, v in params.items():
-        text = text.replace(f'{{{k}}}', str(v))
-    return text
-
-def set_gaming_tool(tool, enabled):
-    global enable_gamescope, enable_mangohud, enable_vkbasalt
-    if tool == 'gamescope':
-        enable_gamescope = enabled
-    elif tool == 'mangohud':
-        enable_mangohud = enabled
-    elif tool == 'vkbasalt':
-        enable_vkbasalt = enabled
-    logging.info(f'Toggled {tool} to {enabled}')
+def setup_language():
+    # Placeholder for language initialization logic if needed
+    pass
