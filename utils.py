@@ -2,46 +2,37 @@ import logging
 import os
 import getpass
 
-# Get the current user's home directory
 user_home = os.path.expanduser('~')
-
-# Set up logging to a user-writable directory
 log_dir = os.path.join(user_home, '.hackeros')
 log_file = os.path.join(log_dir, 'hacker-mode.log')
 
-# Ensure the log directory exists and is writable
 try:
     os.makedirs(log_dir, exist_ok=True)
-    # Verify that the directory is writable
     if not os.access(log_dir, os.W_OK):
         raise PermissionError(f"No write permission for directory: {log_dir}")
 except PermissionError as e:
-    # Fallback to a temporary directory if the primary log directory is not writable
     log_dir = os.path.join(os.path.expanduser('~'), '.cache', 'hackeros')
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, 'hacker-mode.log')
     logging.warning(f"Failed to use primary log directory due to: {e}. Using fallback: {log_file}")
 
-# Configure logging
 try:
     logging.basicConfig(
         filename=log_file,
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
-        filemode='a'  # Append mode to avoid overwriting
+        filemode='a'
     )
 except PermissionError as e:
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler()]  # Fallback to console logging
+        handlers=[logging.StreamHandler()]
     )
     logging.error(f"Failed to open log file {log_file}: {e}. Logging to console instead.")
 
-# Language setting
-lang = 'en'  # Default language
+lang = 'en'
 
-# Translation dictionary
 translations = {
     'en': {
         'settings': 'Settings',
@@ -161,5 +152,5 @@ def set_language(new_lang):
         logging.warning(f'Invalid language: {new_lang}')
 
 def setup_language():
-    # Placeholder for language initialization logic if needed
     pass
+
