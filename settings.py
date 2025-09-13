@@ -4,7 +4,7 @@ import os
 from PySide6.QtWidgets import QMainWindow, QLabel, QPushButton, QGridLayout, QVBoxLayout, QWidget, QHBoxLayout, QComboBox, QCheckBox, QLineEdit, QScrollArea, QMessageBox
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, QTimer
-from utils import get_text, set_gaming_tool, set_language, logging, lang  # Import lang from utils
+from utils import get_text, set_gaming_tool, set_language, logging, lang
 
 is_dark_mode = True
 is_muted = False
@@ -90,7 +90,7 @@ class SettingsWindow(QMainWindow):
         self.bottom_layout = QHBoxLayout()
         self.bottom_layout.setAlignment(Qt.AlignRight)
         self.bottom_layout.setSpacing(40)
-        self.bottom_layout.addStretch()  # Push buttons to the right
+        self.bottom_layout.addStretch()
         self.back_btn = QPushButton(get_text('back'))
         self.back_btn.setObjectName('action-btn')
         self.back_btn.setFixedSize(300, 100)
@@ -105,14 +105,13 @@ class SettingsWindow(QMainWindow):
         self.close_btn.clicked.connect(self.close)
         self.bottom_layout.addWidget(self.close_btn)
         self.layout.addLayout(self.bottom_layout)
-        self.layout.addStretch()  # Push bottom_layout to the bottom
+        self.layout.addStretch()
         self.update_texts()
         QTimer.singleShot(100, self.animate_panels)
         QTimer.singleShot(500, self.log_button_visibility)
         logging.info('SettingsWindow initialized successfully')
 
     def log_button_visibility(self):
-        """Log the visibility and geometry of the Back button for debugging."""
         logging.info(f'Back button visible: {self.back_btn.isVisible()}, geometry: {self.back_btn.geometry().getRect()}')
 
     def back_to_main(self):
@@ -246,7 +245,7 @@ class SettingsWindow(QMainWindow):
         self.lang_select.setObjectName('input-field')
         self.lang_select.setFixedHeight(60)
         self.lang_select.addItems(['en', 'pl'])
-        self.lang_select.setCurrentText(lang)  # lang imported from utils
+        self.lang_select.setCurrentText(lang)
         layout.addWidget(self.lang_select)
         apply_lang = QPushButton('Apply Language')
         apply_lang.setObjectName('setting-btn')
@@ -497,4 +496,3 @@ class SettingsWindow(QMainWindow):
             super().closeEvent(event)
         except Exception as e:
             logging.error(f'Error during close event: {e}')
-
