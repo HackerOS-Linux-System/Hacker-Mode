@@ -1,12 +1,15 @@
+# launchers.py
 import subprocess
 import time
 import os
+import sys
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import QTimer
 from utils import get_text, logging
 
 running_processes = []
 last_launch_times = {}
+
 apps = {
     'steam': {'command': ['flatpak', 'run', 'com.valvesoftware.Steam', '-gamepadui'], 'flatpak': True, 'requires_internet': True, 'title_name': 'Steam'},
     'heroic': {'command': ['flatpak', 'run', 'com.heroicgameslauncher.hgl'], 'flatpak': True, 'requires_internet': True, 'title_name': 'Heroic Games Launcher'},
@@ -61,6 +64,13 @@ def set_fullscreen(app_name, title_name, retries=3, delay=3):
     return False
 
 def launch_app(app_name, main_window):
+    if app_name == 'steam':
+        logging.info('Launching Steam with gamescope-session-plus and closing application')
+        main_window.close()
+        subprocess.Popen(['gamescope-session-plus', 'steam'])
+        sys.exit(0)  # Ensure the application exits completely
+        return
+
     current_time = time.time()
     last_launch = last_launch_times.get(app_name, 0)
     cooldown = 60
@@ -69,16 +79,20 @@ def launch_app(app_name, main_window):
         QMessageBox.warning(None, "Warning", get_text('launch_cooldown', {'seconds': remaining, 'app': app_name}))
         logging.info(f'Launch blocked for {app_name} due to cooldown: {remaining}s')
         return
+
     app = apps.get(app_name)
     if not app:
         logging.error(f'Unknown app: {app_name}')
         return
+
     if not check_app_installed(app['command'], app_name):
         return
+
     if app['requires_internet'] and not check_internet():
         QMessageBox.warning(None, "Warning", get_text('no_internet'))
         logging.error(f'No internet for {app_name}')
         return
+
     main_window.hide()
     logging.info(f'Launching {app_name}')
     env = os.environ.copy()
@@ -87,6 +101,7 @@ def launch_app(app_name, main_window):
     running_processes.append((app_name, proc))
     last_launch_times[app_name] = current_time
     QTimer.singleShot(3000, lambda: set_fullscreen(app_name, app['title_name']))
+
     def check_process():
         if proc.poll() is not None:
             logging.info(f'{app_name} closed')
@@ -98,6 +113,7 @@ def launch_app(app_name, main_window):
                 logging.error(f'Error restoring fullscreen for Hacker Mode: {err}')
             return
         QTimer.singleShot(1000, check_process)
+
     QTimer.singleShot(1000, check_process)
 
 def system_action(action, main_window=None):
