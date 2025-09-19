@@ -1,3 +1,4 @@
+# main.py
 import sys
 import os
 from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QPushButton, QGridLayout, QVBoxLayout, QWidget, QHBoxLayout, QMenu, QSpacerItem
@@ -12,10 +13,12 @@ class IconLoader:
     def __init__(self):
         self.manager = QNetworkAccessManager()
         self.icons = {}
+
     def load_icon(self, url, callback):
         request = QNetworkRequest(QUrl(url))
         reply = self.manager.get(request)
         reply.finished.connect(lambda: self.icon_loaded(reply, callback))
+
     def icon_loaded(self, reply, callback):
         if reply.error() == QNetworkReply.NoError:
             pixmap = QPixmap()
@@ -36,47 +39,53 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
         self.layout.setAlignment(Qt.AlignCenter)
-        self.layout.setSpacing(50)
-        self.layout.setContentsMargins(70, 70, 70, 70)
+        self.layout.setSpacing(60)  # Increased spacing for better layout
+        self.layout.setContentsMargins(80, 80, 80, 80)  # Larger margins
+
         self.top_layout = QHBoxLayout()
         self.hackeros_logo = QLabel()
         self.hackeros_logo.setObjectName('logo')
         pixmap_hackeros = QPixmap('/usr/share/HackerOS/ICONS/HackerOS.png')
-        self.hackeros_logo.setPixmap(pixmap_hackeros.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.hackeros_logo.setPixmap(pixmap_hackeros.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))  # Larger logo
         self.top_layout.addWidget(self.hackeros_logo, alignment=Qt.AlignLeft)
         self.top_layout.addStretch()
         self.hackermode_logo = QLabel()
         self.hackermode_logo.setObjectName('logo')
         pixmap_hackermode = QPixmap('/usr/share/HackerOS/ICONS/Hacker-Mode.png')
-        self.hackermode_logo.setPixmap(pixmap_hackermode.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.hackermode_logo.setPixmap(pixmap_hackermode.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))  # Larger logo
         self.top_layout.addWidget(self.hackermode_logo, alignment=Qt.AlignRight)
         self.layout.addLayout(self.top_layout)
+
         self.title = QLabel(get_text('title'))
-        self.title.setFont(QFont('Hack', 60, QFont.Bold))
+        self.title.setFont(QFont('Hack', 70, QFont.Bold))  # Larger font
         self.title.setObjectName('neon-text')
         self.layout.addWidget(self.title, alignment=Qt.AlignCenter)
+
         self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(60)
-        self.grid_layout.setContentsMargins(50, 50, 50, 50)
+        self.grid_layout.setSpacing(80)  # Increased spacing
+        self.grid_layout.setContentsMargins(60, 60, 60, 60)  # Larger margins
         self.layout.addLayout(self.grid_layout)
+
         self.launcher_buttons = []
         self.add_launcher_button('steam', 'https://store.steampowered.com/favicon.ico', 0, 0)
         self.add_launcher_button('heroic', 'https://www.heroicgameslauncher.com/favicon.ico', 0, 1)
         self.add_launcher_button('hyperplay', 'https://cdn-icons-png.flaticon.com/512/5968/5968778.png', 0, 2)
         self.add_launcher_button('lutris', 'https://lutris.net/static/images/logo.png', 0, 3)
+
         self.bottom_layout = QHBoxLayout()
         self.hacker_menu_btn = QPushButton(get_text('hacker_menu'))
         self.hacker_menu_btn.setObjectName('action-btn')
-        self.hacker_menu_btn.setFixedSize(220, 70)
+        self.hacker_menu_btn.setFixedSize(250, 80)  # Larger button
         self.hacker_menu_btn.clicked.connect(self.show_hacker_menu)
         self.bottom_layout.addWidget(self.hacker_menu_btn, alignment=Qt.AlignLeft)
         self.bottom_layout.addStretch()
         self.settings_btn = QPushButton(get_text('settings'))
         self.settings_btn.setObjectName('action-btn')
-        self.settings_btn.setFixedSize(220, 70)
+        self.settings_btn.setFixedSize(250, 80)  # Larger button
         self.settings_btn.clicked.connect(self.launch_settings)
         self.bottom_layout.addWidget(self.settings_btn, alignment=Qt.AlignRight)
         self.layout.addLayout(self.bottom_layout)
+
         self.update_texts()
         QTimer.singleShot(100, self.animate_elements)
 
@@ -84,34 +93,36 @@ class MainWindow(QMainWindow):
         for i, btn in enumerate(self.launcher_buttons):
             anim = QPropertyAnimation(btn, b"geometry")
             rect = btn.geometry()
-            anim.setStartValue(QRect(rect.x(), rect.y() + 250, rect.width(), rect.height()))
+            anim.setStartValue(QRect(rect.x(), rect.y() + 300, rect.width(), rect.height()))  # More dramatic animation
             anim.setEndValue(rect)
-            anim.setDuration(1500)
+            anim.setDuration(2000)  # Slower animation
             anim.setEasingCurve(QEasingCurve.OutQuint)
-            QTimer.singleShot(i * 300, lambda: anim.start())
+            QTimer.singleShot(i * 400, lambda: anim.start())  # More delay between animations
+
         logo_anim1 = QPropertyAnimation(self.hackeros_logo, b"opacity")
         logo_anim1.setStartValue(0.0)
         logo_anim1.setEndValue(1.0)
-        logo_anim1.setDuration(1500)
+        logo_anim1.setDuration(2000)
         logo_anim1.setEasingCurve(QEasingCurve.OutQuint)
-        QTimer.singleShot(300, lambda: logo_anim1.start())
+        QTimer.singleShot(400, lambda: logo_anim1.start())
+
         logo_anim2 = QPropertyAnimation(self.hackermode_logo, b"opacity")
         logo_anim2.setStartValue(0.0)
         logo_anim2.setEndValue(1.0)
-        logo_anim2.setDuration(1500)
+        logo_anim2.setDuration(2000)
         logo_anim2.setEasingCurve(QEasingCurve.OutQuint)
-        QTimer.singleShot(600, lambda: logo_anim2.start())
+        QTimer.singleShot(800, lambda: logo_anim2.start())
 
     def add_launcher_button(self, app_name, icon_url, row, col):
         btn = QPushButton(objectName='launcher-btn')
-        btn.setFixedSize(240, 240)
+        btn.setFixedSize(280, 280)  # Larger buttons
         layout = QVBoxLayout(btn)
-        layout.setContentsMargins(25, 25, 25, 25)
+        layout.setContentsMargins(30, 30, 30, 30)  # Larger margins
         icon_label = QLabel()
         icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(icon_label)
         text_label = QLabel(get_text(app_name))
-        text_label.setFont(QFont('Hack', 20))
+        text_label.setFont(QFont('Hack', 24))  # Larger font
         text_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(text_label)
         icon_loader.load_icon(icon_url, icon_label.setPixmap)
@@ -154,88 +165,88 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     stylesheet = """
     QMainWindow, QWidget {
-        background: qradialgradient(cx:0.5, cy:0.5, radius:1.4, stop:0 #1a1a1a, stop:1 #000000);
+        background: qradialgradient(cx:0.5, cy:0.5, radius:1.5, stop:0 #1a1a1a, stop:1 #000000);  /* Softer gradient */
         color: white;
         font-family: 'Hack', 'Courier New', monospace;
     }
     #neon-text {
         color: #ffffff;
-        text-shadow: 0 0 12px #ffffff, 0 0 25px #ffffff, 0 0 40px #ffffff, 0 0 60px #ffffff;
-        animation: neon 0.8s ease-in-out infinite alternate;
+        text-shadow: 0 0 15px #ffffff, 0 0 30px #ffffff, 0 0 50px #ffffff, 0 0 70px #ffffff;  /* Enhanced neon */
+        animation: neon 1.0s ease-in-out infinite alternate;
     }
     @keyframes neon {
         from {
-            text-shadow: 0 0 6px #ffffff, 0 0 12px #ffffff, 0 0 20px #ffffff;
+            text-shadow: 0 0 8px #ffffff, 0 0 15px #ffffff, 0 0 25px #ffffff;
         }
         to {
-            text-shadow: 0 0 15px #ffffff, 0 0 30px #ffffff, 0 0 50px #ffffff, 0 0 70px #ffffff;
+            text-shadow: 0 0 20px #ffffff, 0 0 40px #ffffff, 0 0 60px #ffffff, 0 0 80px #ffffff;
         }
     }
     #logo {
-        border: 2px solid #ffffff;
-        border-radius: 12px;
-        box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
-        transition: all 0.3s ease;
+        border: 3px solid #ffffff;  /* Thicker border */
+        border-radius: 15px;
+        box-shadow: 0 0 25px rgba(255, 255, 255, 0.6);
+        transition: all 0.4s ease;
     }
     #logo:hover {
-        box-shadow: 0 0 30px rgba(255, 255, 255, 0.7);
-        transform: scale(1.08);
+        box-shadow: 0 0 40px rgba(255, 255, 255, 0.8);
+        transform: scale(1.1);
     }
     QPushButton#launcher-btn {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2a2a2a, stop:1 #151515);
-        border-radius: 30px;
-        padding: 30px;
-        border: 2px solid #ffffff;
-        box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
-        transition: all 0.3s ease;
+        border-radius: 40px;  /* More rounded */
+        padding: 35px;
+        border: 3px solid #ffffff;  /* Thicker border */
+        box-shadow: 0 0 25px rgba(255, 255, 255, 0.6);
+        transition: all 0.4s ease;
     }
     QPushButton#launcher-btn:hover {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #252525);
-        transform: scale(1.12);
-        box-shadow: 0 0 40px rgba(255, 255, 255, 0.7);
+        transform: scale(1.15);
+        box-shadow: 0 0 50px rgba(255, 255, 255, 0.8);
     }
     QWidget#setting-panel {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2a2a2a, stop:1 #151515);
-        border-radius: 30px;
-        padding: 30px;
-        border: 2px solid #ffffff;
-        box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
-        transition: all 0.3s ease;
+        border-radius: 40px;  /* More rounded */
+        padding: 35px;
+        border: 3px solid #ffffff;  /* Thicker border */
+        box-shadow: 0 0 25px rgba(255, 255, 255, 0.6);
+        transition: all 0.4s ease;
     }
     QWidget#setting-panel:hover {
-        transform: translateY(-12px);
-        box-shadow: 0 0 40px rgba(255, 255, 255, 0.7);
+        transform: translateY(-15px);
+        box-shadow: 0 0 50px rgba(255, 255, 255, 0.8);
     }
     QPushButton#action-btn, QPushButton#setting-btn, QPushButton#list-btn {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2a2a2a, stop:1 #151515);
-        border-radius: 15px;
-        padding: 15px;
+        border-radius: 20px;  /* More rounded */
+        padding: 18px;
         color: white;
-        font-size: 22px;
-        border: 2px solid #ffffff;
-        box-shadow: 0 0 20px rgba(255, 255, 255, 0.6);
-        transition: all 0.3s ease;
+        font-size: 24px;  /* Larger font */
+        border: 3px solid #ffffff;  /* Thicker border */
+        box-shadow: 0 0 25px rgba(255, 255, 255, 0.7);
+        transition: all 0.4s ease;
     }
     QPushButton#action-btn:hover, QPushButton#setting-btn:hover, QPushButton#list-btn:hover {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #252525);
-        transform: translateY(-6px);
-        box-shadow: 0 0 30px rgba(255, 255, 255, 0.7);
+        transform: translateY(-8px);
+        box-shadow: 0 0 40px rgba(255, 255, 255, 0.8);
     }
     QLabel {
         color: white;
-        font-size: 20px;
+        font-size: 22px;  /* Larger font */
     }
     QLabel#list-label {
-        font-size: 18px;
+        font-size: 20px;
         color: #dddddd;
     }
     QComboBox, QLineEdit#input-field {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2a2a2a, stop:1 #151515);
         color: white;
-        border-radius: 12px;
-        padding: 12px;
-        border: 1px solid #ffffff;
-        font-size: 20px;
+        border-radius: 15px;
+        padding: 15px;
+        border: 2px solid #ffffff;
+        font-size: 22px;  /* Larger font */
     }
     QScrollArea {
         background: transparent;
@@ -243,21 +254,21 @@ if __name__ == '__main__':
     }
     QCheckBox#checkbox {
         color: white;
-        font-size: 20px;
+        font-size: 22px;  /* Larger font */
     }
     QMenu#hacker-menu {
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2a2a2a, stop:1 #151515);
-        border-radius: 15px;
-        border: 2px solid #ffffff;
+        border-radius: 20px;
+        border: 3px solid #ffffff;  /* Thicker border */
         color: white;
-        padding: 12px;
-        box-shadow: 0 0 25px rgba(255, 255, 255, 0.5);
+        padding: 15px;
+        box-shadow: 0 0 30px rgba(255, 255, 255, 0.6);
     }
     QMenu#hacker-menu::item {
-        padding: 12px 25px;
-        border-radius: 10px;
-        font-size: 20px;
-        transition: all 0.2s ease;
+        padding: 15px 30px;
+        border-radius: 12px;
+        font-size: 22px;  /* Larger font */
+        transition: all 0.3s ease;
     }
     QMenu#hacker-menu::item:hover {
         background: #3d3d3d;
