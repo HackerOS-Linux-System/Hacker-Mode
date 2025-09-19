@@ -1,3 +1,4 @@
+# utils.py
 import logging
 import os
 import getpass
@@ -32,7 +33,6 @@ except PermissionError as e:
     logging.error(f"Failed to open log file {log_file}: {e}. Logging to console instead.")
 
 lang = 'en'
-
 translations = {
     'en': {
         'settings': 'Settings',
@@ -153,4 +153,3 @@ def set_language(new_lang):
 
 def setup_language():
     pass
-
