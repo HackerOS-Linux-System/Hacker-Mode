@@ -1,4 +1,3 @@
-# settings.py
 import subprocess
 import time
 import os
@@ -22,17 +21,17 @@ class SettingsWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
         self.layout.setAlignment(Qt.AlignCenter)
-        self.layout.setSpacing(70)  # Increased spacing
-        self.layout.setContentsMargins(80, 80, 80, 80)  # Larger margins
+        self.layout.setSpacing(70)
+        self.layout.setContentsMargins(80, 80, 80, 80)
 
         self.title = QLabel(get_text('settings'))
-        self.title.setFont(QFont('Hack', 55, QFont.Bold))  # Larger font
+        self.title.setFont(QFont('Hack', 55, QFont.Bold))
         self.title.setObjectName('neon-text')
         self.layout.addWidget(self.title, alignment=Qt.AlignCenter)
 
         self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(60)  # Increased spacing
-        self.grid_layout.setContentsMargins(60, 60, 60, 60)  # Larger margins
+        self.grid_layout.setSpacing(60)
+        self.grid_layout.setContentsMargins(60, 60, 60, 60)
         self.layout.addLayout(self.grid_layout)
 
         self.add_audio_panel()
@@ -44,9 +43,9 @@ class SettingsWindow(QMainWindow):
 
         self.wifi_panel = QWidget(objectName='setting-panel')
         self.wifi_layout = QVBoxLayout(self.wifi_panel)
-        self.wifi_layout.setSpacing(30)  # Increased spacing
+        self.wifi_layout.setSpacing(30)
         self.wifi_title = QLabel(get_text('wifi_settings'))
-        self.wifi_title.setFont(QFont('Hack', 24, QFont.Bold))  # Larger font
+        self.wifi_title.setFont(QFont('Hack', 24, QFont.Bold))
         self.wifi_layout.addWidget(self.wifi_title)
         self.wifi_list = QScrollArea()
         self.wifi_list.setWidgetResizable(True)
@@ -58,11 +57,11 @@ class SettingsWindow(QMainWindow):
         self.wifi_password = QLineEdit()
         self.wifi_password.setPlaceholderText('Password (if required)')
         self.wifi_password.setObjectName('input-field')
-        self.wifi_password.setFixedHeight(70)  # Larger input
+        self.wifi_password.setFixedHeight(70)
         self.wifi_layout.addWidget(self.wifi_password)
         self.connect_btn = QPushButton(get_text('connect'))
         self.connect_btn.setObjectName('setting-btn')
-        self.connect_btn.setFixedHeight(70)  # Larger button
+        self.connect_btn.setFixedHeight(70)
         self.connect_btn.clicked.connect(self.connect_wifi)
         self.wifi_layout.addWidget(self.connect_btn)
         self.wifi_panel.setHidden(True)
@@ -70,9 +69,9 @@ class SettingsWindow(QMainWindow):
 
         self.bluetooth_panel = QWidget(objectName='setting-panel')
         self.bluetooth_layout = QVBoxLayout(self.bluetooth_panel)
-        self.bluetooth_layout.setSpacing(30)  # Increased spacing
+        self.bluetooth_layout.setSpacing(30)
         self.bluetooth_title = QLabel(get_text('bluetooth'))
-        self.bluetooth_title.setFont(QFont('Hack', 24, QFont.Bold))  # Larger font
+        self.bluetooth_title.setFont(QFont('Hack', 24, QFont.Bold))
         self.bluetooth_layout.addWidget(self.bluetooth_title)
         self.bluetooth_list = QScrollArea()
         self.bluetooth_list.setWidgetResizable(True)
@@ -83,12 +82,12 @@ class SettingsWindow(QMainWindow):
         self.bluetooth_layout.addWidget(self.bluetooth_list)
         self.scan_btn = QPushButton(get_text('scan'))
         self.scan_btn.setObjectName('setting-btn')
-        self.scan_btn.setFixedHeight(70)  # Larger button
+        self.scan_btn.setFixedHeight(70)
         self.scan_btn.clicked.connect(self.scan_bluetooth)
         self.bluetooth_layout.addWidget(self.scan_btn)
         self.pair_btn = QPushButton(get_text('pair'))
         self.pair_btn.setObjectName('setting-btn')
-        self.pair_btn.setFixedHeight(70)  # Larger button
+        self.pair_btn.setFixedHeight(70)
         self.pair_btn.clicked.connect(self.pair_bluetooth)
         self.bluetooth_layout.addWidget(self.pair_btn)
         self.bluetooth_panel.setHidden(True)
@@ -96,19 +95,19 @@ class SettingsWindow(QMainWindow):
 
         self.bottom_layout = QHBoxLayout()
         self.bottom_layout.setAlignment(Qt.AlignRight)
-        self.bottom_layout.setSpacing(50)  # Increased spacing
+        self.bottom_layout.setSpacing(50)
         self.bottom_layout.addStretch()
         self.back_btn = QPushButton(get_text('back'))
         self.back_btn.setObjectName('action-btn')
-        self.back_btn.setFixedSize(320, 110)  # Larger button
-        self.back_btn.setFont(QFont('Hack', 26, QFont.Bold))  # Larger font
+        self.back_btn.setFixedSize(320, 110)
+        self.back_btn.setFont(QFont('Hack', 26, QFont.Bold))
         self.back_btn.clicked.connect(self.back_to_main)
         self.bottom_layout.addWidget(self.back_btn)
         logging.info(f'Back button added to settings window at position: {self.back_btn.geometry().getRect()}')
         self.close_btn = QPushButton(get_text('close'))
         self.close_btn.setObjectName('action-btn')
-        self.close_btn.setFixedSize(320, 110)  # Larger button
-        self.close_btn.setFont(QFont('Hack', 26, QFont.Bold))  # Larger font
+        self.close_btn.setFixedSize(320, 110)
+        self.close_btn.setFont(QFont('Hack', 26, QFont.Bold))
         self.close_btn.clicked.connect(self.close)
         self.bottom_layout.addWidget(self.close_btn)
         self.layout.addLayout(self.bottom_layout)
@@ -140,11 +139,11 @@ class SettingsWindow(QMainWindow):
         for i, panel in enumerate(panels):
             anim = QPropertyAnimation(panel, b"geometry")
             rect = panel.geometry()
-            anim.setStartValue(QRect(rect.x(), rect.y() + 300, rect.width(), rect.height()))  # More dramatic
+            anim.setStartValue(QRect(rect.x(), rect.y() + 300, rect.width(), rect.height()))
             anim.setEndValue(rect)
-            anim.setDuration(2000)  # Slower
+            anim.setDuration(2000)
             anim.setEasingCurve(QEasingCurve.OutQuint)
-            QTimer.singleShot(i * 400, anim.start)  # More delay
+            QTimer.singleShot(i * 400, anim.start)
 
     def add_audio_panel(self):
         panel = QWidget(objectName='setting-panel')
