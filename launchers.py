@@ -1,4 +1,3 @@
-# launchers.py
 import subprocess
 import time
 import os
@@ -24,20 +23,20 @@ def check_app_installed(command, app_name):
             result = subprocess.run(['flatpak', 'list', '--app', '--columns=application'], capture_output=True, text=True)
             installed = flatpak_id in result.stdout.splitlines()
             if not installed:
-                QMessageBox.warning(None, "Warning", get_text('app_not_installed'))
+                QMessageBox.warning(None, "Warning", get_text('app_not_installed', {'app': app_name}))
                 logging.error(f'{app_name} not installed')
                 return False
             return True
         else:
             result = subprocess.run(['which', command[0]], capture_output=True)
             if result.returncode != 0:
-                QMessageBox.warning(None, "Warning", get_text('app_not_installed'))
+                QMessageBox.warning(None, "Warning", get_text('app_not_installed', {'app': app_name}))
                 logging.error(f'{app_name} not installed')
                 return False
             return True
     except Exception as e:
         logging.error(f'Error checking if {app_name} is installed: {e}')
-        QMessageBox.warning(None, "Warning", get_text('app_not_installed'))
+        QMessageBox.warning(None, "Warning", get_text('app_not_installed', {'app': app_name}))
         return False
 
 def check_internet():
@@ -68,7 +67,7 @@ def launch_app(app_name, main_window):
         logging.info('Launching Steam with gamescope-session-plus and closing application')
         main_window.close()
         subprocess.Popen(['gamescope-session-plus', 'steam'])
-        sys.exit(0)  # Ensure the application exits completely
+        sys.exit(0)
         return
 
     current_time = time.time()
