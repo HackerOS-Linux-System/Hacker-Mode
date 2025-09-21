@@ -1,11 +1,9 @@
 import logging
 import os
 import getpass
-
 user_home = os.path.expanduser('~')
 log_dir = os.path.join(user_home, '.hackeros')
 log_file = os.path.join(log_dir, 'hacker-mode.log')
-
 try:
     os.makedirs(log_dir, exist_ok=True)
     if not os.access(log_dir, os.W_OK):
@@ -15,7 +13,6 @@ except PermissionError as e:
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, 'hacker-mode.log')
     logging.warning(f"Failed to use primary log directory due to: {e}. Using fallback: {log_file}")
-
 try:
     logging.basicConfig(
         filename=log_file,
@@ -30,7 +27,6 @@ except PermissionError as e:
         handlers=[logging.StreamHandler()]
     )
     logging.error(f"Failed to open log file {log_file}: {e}. Logging to console instead.")
-
 lang = 'en'
 translations = {
     'en': {
@@ -80,7 +76,14 @@ translations = {
         'restart': 'Restart',
         'sleep': 'Sleep',
         'restart_apps': 'Restart Apps',
-        'restart_sway': 'Restart Wayfire'
+        'restart_app': 'Restart App',
+        'updates': 'Updates',
+        'check_updates': 'Check for Updates',
+        'apply_updates': 'Apply Updates',
+        'updates_checked': 'Updates checked successfully',
+        'updates_check_failed': 'Failed to check updates: {error}',
+        'updates_applied': 'Updates applied successfully',
+        'updates_apply_failed': 'Failed to apply updates: {error}'
     },
     'pl': {
         'settings': 'Ustawienia',
@@ -129,19 +132,23 @@ translations = {
         'restart': 'Uruchom ponownie',
         'sleep': 'Uśpij',
         'restart_apps': 'Uruchom ponownie aplikacje',
-        'restart_sway': 'Uruchom ponownie Wayfire'
+        'restart_app': 'Uruchom ponownie aplikację',
+        'updates': 'Aktualizacje',
+        'check_updates': 'Sprawdź aktualizacje',
+        'apply_updates': 'Zainstaluj aktualizacje',
+        'updates_checked': 'Aktualizacje sprawdzone pomyślnie',
+        'updates_check_failed': 'Nie udało się sprawdzić aktualizacji: {error}',
+        'updates_applied': 'Aktualizacje zainstalowane pomyślnie',
+        'updates_apply_failed': 'Nie udało się zainstalować aktualizacji: {error}'
     }
 }
-
 def get_text(key, params=None):
     text = translations[lang].get(key, key)
     if params:
         return text.format(**params)
     return text
-
 def set_gaming_tool(tool, enabled):
     logging.info(f'Setting {tool} to {"enabled" if enabled else "disabled"}')
-
 def set_language(new_lang):
     global lang
     if new_lang in translations:
@@ -149,6 +156,5 @@ def set_language(new_lang):
         logging.info(f'Language set to {lang}')
     else:
         logging.warning(f'Invalid language: {new_lang}')
-
 def setup_language():
     pass
