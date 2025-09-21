@@ -1,17 +1,15 @@
 import subprocess
 import time
 import os
-from PySide6.QtWidgets import QMainWindow, QLabel, QPushButton, QGridLayout, QVBoxLayout, QWidget, QHBoxLayout, QComboBox, QCheckBox, QLineEdit, QScrollArea, QMessageBox
+from PySide6.QtWidgets import QMainWindow, QLabel, QPushButton, QGridLayout, QVBoxLayout, QWidget, QHBoxLayout, QComboBox, QCheckBox, QLineEdit, QScrollArea, QMessageBox, QSlider
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve, QTimer
 from utils import get_text, set_gaming_tool, set_language, logging, lang
-
 is_dark_mode = True
 is_muted = False
 wifi_enabled = True
 selected_wifi = None
 selected_bluetooth = None
-
 class SettingsWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,24 +21,21 @@ class SettingsWindow(QMainWindow):
         self.layout.setAlignment(Qt.AlignCenter)
         self.layout.setSpacing(70)
         self.layout.setContentsMargins(80, 80, 80, 80)
-
         self.title = QLabel(get_text('settings'))
         self.title.setFont(QFont('Hack', 55, QFont.Bold))
         self.title.setObjectName('neon-text')
         self.layout.addWidget(self.title, alignment=Qt.AlignCenter)
-
         self.grid_layout = QGridLayout()
         self.grid_layout.setSpacing(60)
         self.grid_layout.setContentsMargins(60, 60, 60, 60)
         self.layout.addLayout(self.grid_layout)
-
         self.add_audio_panel()
         self.add_display_panel()
         self.add_network_panel()
         self.add_power_panel()
         self.add_general_panel()
         self.add_gaming_tools_panel()
-
+        self.add_updates_panel()  # Nowa sekcja ulepszająca ustawienia
         self.wifi_panel = QWidget(objectName='setting-panel')
         self.wifi_layout = QVBoxLayout(self.wifi_panel)
         self.wifi_layout.setSpacing(30)
@@ -66,7 +61,6 @@ class SettingsWindow(QMainWindow):
         self.wifi_layout.addWidget(self.connect_btn)
         self.wifi_panel.setHidden(True)
         self.layout.addWidget(self.wifi_panel)
-
         self.bluetooth_panel = QWidget(objectName='setting-panel')
         self.bluetooth_layout = QVBoxLayout(self.bluetooth_panel)
         self.bluetooth_layout.setSpacing(30)
@@ -92,7 +86,6 @@ class SettingsWindow(QMainWindow):
         self.bluetooth_layout.addWidget(self.pair_btn)
         self.bluetooth_panel.setHidden(True)
         self.layout.addWidget(self.bluetooth_panel)
-
         self.bottom_layout = QHBoxLayout()
         self.bottom_layout.setAlignment(Qt.AlignRight)
         self.bottom_layout.setSpacing(50)
@@ -112,15 +105,12 @@ class SettingsWindow(QMainWindow):
         self.bottom_layout.addWidget(self.close_btn)
         self.layout.addLayout(self.bottom_layout)
         self.layout.addStretch()
-
         self.update_texts()
         QTimer.singleShot(100, self.animate_panels)
         QTimer.singleShot(500, self.log_button_visibility)
         logging.info('SettingsWindow initialized successfully')
-
     def log_button_visibility(self):
         logging.info(f'Back button visible: {self.back_btn.isVisible()}, geometry: {self.back_btn.geometry().getRect()}')
-
     def back_to_main(self):
         try:
             if self.parent():
@@ -131,20 +121,7 @@ class SettingsWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", get_text('error_returning_to_main', {'error': 'No parent window'}))
             self.close()
         except Exception as e:
-            logging.error(f'Error returning to main window: {e}')
-            QMessageBox.warning(self, "Warning", get_text('error_returning_to_main', {'error': str(e)}))
-
-    def animate_panels(self):
-        panels = self.central_widget.findChildren(QWidget, 'setting-panel')
-        for i, panel in enumerate(panels):
-            anim = QPropertyAnimation(panel, b"geometry")
-            rect = panel.geometry()
-            anim.setStartValue(QRect(rect.x(), rect.y() + 300, rect.width(), rect.height()))
-            anim.setEndValue(rect)
-            anim.setDuration(2000)
-            anim.setEasingCurve(QEasingCurve.OutQuint)
-            QTimer.singleShot(i * 400, anim.start)
-
+            logging.error(f'Error returning to main: {e}')
     def add_audio_panel(self):
         panel = QWidget(objectName='setting-panel')
         layout = QVBoxLayout(panel)
@@ -152,23 +129,20 @@ class SettingsWindow(QMainWindow):
         title = QLabel(get_text('audio'))
         title.setFont(QFont('Hack', 22, QFont.Bold))
         layout.addWidget(title)
-        inc_vol = QPushButton(get_text('increase_volume'))
-        inc_vol.setObjectName('setting-btn')
-        inc_vol.setFixedHeight(70)
-        inc_vol.clicked.connect(lambda: self.audio_action('increaseVolume'))
-        layout.addWidget(inc_vol)
-        dec_vol = QPushButton(get_text('decrease_volume'))
-        dec_vol.setObjectName('setting-btn')
-        dec_vol.setFixedHeight(70)
-        dec_vol.clicked.connect(lambda: self.audio_action('decreaseVolume'))
-        layout.addWidget(dec_vol)
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(50)  # Domyślna wartość
+        self.volume_slider.valueChanged.connect(self.set_volume)
+        layout.addWidget(self.volume_slider)
         toggle_mute = QPushButton(get_text('toggle_mute'))
         toggle_mute.setObjectName('setting-btn')
         toggle_mute.setFixedHeight(70)
         toggle_mute.clicked.connect(lambda: self.audio_action('toggleMute'))
         layout.addWidget(toggle_mute)
         self.grid_layout.addWidget(panel, 0, 0)
-
+    def set_volume(self, value):
+        logging.info(f'Setting volume to {value}%')
+        subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', f'{value}%'])
     def add_display_panel(self):
         panel = QWidget(objectName='setting-panel')
         layout = QVBoxLayout(panel)
@@ -176,23 +150,20 @@ class SettingsWindow(QMainWindow):
         title = QLabel(get_text('display'))
         title.setFont(QFont('Hack', 22, QFont.Bold))
         layout.addWidget(title)
-        inc_bright = QPushButton(get_text('increase_brightness'))
-        inc_bright.setObjectName('setting-btn')
-        inc_bright.setFixedHeight(70)
-        inc_bright.clicked.connect(lambda: self.display_action('increaseBrightness'))
-        layout.addWidget(inc_bright)
-        dec_bright = QPushButton(get_text('decrease_brightness'))
-        dec_bright.setObjectName('setting-btn')
-        dec_bright.setFixedHeight(70)
-        dec_bright.clicked.connect(lambda: self.display_action('decreaseBrightness'))
-        layout.addWidget(dec_bright)
+        self.brightness_slider = QSlider(Qt.Horizontal)
+        self.brightness_slider.setRange(0, 100)
+        self.brightness_slider.setValue(50)  # Domyślna wartość
+        self.brightness_slider.valueChanged.connect(self.set_brightness)
+        layout.addWidget(self.brightness_slider)
         toggle_theme = QPushButton(get_text('toggle_theme'))
         toggle_theme.setObjectName('setting-btn')
         toggle_theme.setFixedHeight(70)
         toggle_theme.clicked.connect(lambda: self.display_action('toggleTheme'))
         layout.addWidget(toggle_theme)
         self.grid_layout.addWidget(panel, 0, 1)
-
+    def set_brightness(self, value):
+        logging.info(f'Setting brightness to {value}%')
+        subprocess.run(['brightnessctl', 'set', f'{value}%'])
     def add_network_panel(self):
         panel = QWidget(objectName='setting-panel')
         layout = QVBoxLayout(panel)
@@ -216,7 +187,6 @@ class SettingsWindow(QMainWindow):
         bluetooth.clicked.connect(lambda: self.network_action('showBluetooth'))
         layout.addWidget(bluetooth)
         self.grid_layout.addWidget(panel, 1, 0)
-
     def add_power_panel(self):
         panel = QWidget(objectName='setting-panel')
         layout = QVBoxLayout(panel)
@@ -240,7 +210,6 @@ class SettingsWindow(QMainWindow):
         performance.clicked.connect(lambda: self.power_action('performance'))
         layout.addWidget(performance)
         self.grid_layout.addWidget(panel, 1, 1)
-
     def add_general_panel(self):
         panel = QWidget(objectName='setting-panel')
         layout = QVBoxLayout(panel)
@@ -260,7 +229,6 @@ class SettingsWindow(QMainWindow):
         apply_lang.clicked.connect(lambda: self.set_language(self.lang_select.currentText()))
         layout.addWidget(apply_lang)
         self.grid_layout.addWidget(panel, 2, 0)
-
     def add_gaming_tools_panel(self):
         panel = QWidget(objectName='setting-panel')
         layout = QVBoxLayout(panel)
@@ -281,7 +249,57 @@ class SettingsWindow(QMainWindow):
         vkbasalt_check.stateChanged.connect(lambda state: set_gaming_tool('vkbasalt', state == Qt.Checked))
         layout.addWidget(vkbasalt_check)
         self.grid_layout.addWidget(panel, 2, 1)
-
+    def add_updates_panel(self):
+        panel = QWidget(objectName='setting-panel')
+        layout = QVBoxLayout(panel)
+        layout.setSpacing(30)
+        title = QLabel(get_text('updates'))
+        title.setFont(QFont('Hack', 22, QFont.Bold))
+        layout.addWidget(title)
+        check_updates = QPushButton(get_text('check_updates'))
+        check_updates.setObjectName('setting-btn')
+        check_updates.setFixedHeight(70)
+        check_updates.clicked.connect(self.check_updates)
+        layout.addWidget(check_updates)
+        apply_updates = QPushButton(get_text('apply_updates'))
+        apply_updates.setObjectName('setting-btn')
+        apply_updates.setFixedHeight(70)
+        apply_updates.clicked.connect(self.apply_updates)
+        layout.addWidget(apply_updates)
+        self.grid_layout.addWidget(panel, 3, 0)
+    def check_updates(self):
+        logging.info('Checking for updates')
+        try:
+            result = subprocess.run(['apt', 'update'], capture_output=True, text=True)
+            if result.returncode == 0:
+                QMessageBox.information(self, "Info", get_text('updates_checked'))
+            else:
+                QMessageBox.warning(self, "Warning", get_text('updates_check_failed', {'error': result.stderr}))
+        except Exception as e:
+            logging.error(f'Error checking updates: {e}')
+            QMessageBox.warning(self, "Warning", get_text('updates_check_failed', {'error': str(e)}))
+    def apply_updates(self):
+        logging.info('Applying updates')
+        try:
+            result = subprocess.run(['apt', 'upgrade', '-y'], capture_output=True, text=True)
+            if result.returncode == 0:
+                QMessageBox.information(self, "Info", get_text('updates_applied'))
+            else:
+                QMessageBox.warning(self, "Warning", get_text('updates_apply_failed', {'error': result.stderr}))
+        except Exception as e:
+            logging.error(f'Error applying updates: {e}')
+            QMessageBox.warning(self, "Warning", get_text('updates_apply_failed', {'error': str(e)}))
+    def animate_panels(self):
+        for i in range(self.grid_layout.count()):
+            panel = self.grid_layout.itemAt(i).widget()
+            if panel:
+                anim = QPropertyAnimation(panel, b"geometry")
+                rect = panel.geometry()
+                anim.setStartValue(QRect(rect.x(), rect.y() + 300, rect.width(), rect.height()))
+                anim.setEndValue(rect)
+                anim.setDuration(2000)
+                anim.setEasingCurve(QEasingCurve.OutQuint)
+                QTimer.singleShot(i * 200, lambda a=anim: a.start())
     def update_texts(self):
         self.setWindowTitle(get_text('settings'))
         self.title.setText(get_text('settings'))
@@ -306,32 +324,16 @@ class SettingsWindow(QMainWindow):
                 for cb in checkboxes:
                     key = cb.text().lower().replace(' ', '_')
                     cb.setText(get_text(key))
-
     def audio_action(self, action):
         global is_muted
-        if action == 'increaseVolume':
-            logging.info('Increasing volume')
-            is_muted = False
-            subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '+5%'])
-        elif action == 'decreaseVolume':
-            logging.info('Decreasing volume')
-            is_muted = False
-            subprocess.run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', '-5%'])
-        elif action == 'toggleMute':
+        if action == 'toggleMute':
             logging.info('Toggling mute')
             is_muted = not is_muted
             subprocess.run(['pactl', 'set-sink-mute', '@DEFAULT_SINK@', 'toggle'])
-
     def display_action(self, action):
         global is_dark_mode
         config_path = os.path.join(os.path.expanduser('~'), '.hackeros/Hacker-Mode/wayfire.ini')
-        if action == 'increaseBrightness':
-            logging.info('Increasing brightness')
-            subprocess.run(['brightnessctl', 'set', '+5%'])
-        elif action == 'decreaseBrightness':
-            logging.info('Decreasing brightness')
-            subprocess.run(['brightnessctl', 'set', '5%-'])
-        elif action == 'toggleTheme':
+        if action == 'toggleTheme':
             logging.info('Toggling theme')
             is_dark_mode = not is_dark_mode
             theme = 'dark' if is_dark_mode else 'light'
@@ -344,7 +346,6 @@ class SettingsWindow(QMainWindow):
                 subprocess.run(['wayfire', '-c', config_path, '--replace'])
             except Exception as e:
                 logging.error(f'Error toggling theme: {e}')
-
     def network_action(self, action):
         global wifi_enabled
         if action == 'showWifiSettings':
@@ -369,17 +370,14 @@ class SettingsWindow(QMainWindow):
             logging.info('Showing Bluetooth')
             self.bluetooth_panel.setHidden(False)
             self.wifi_panel.setHidden(True)
-
     def power_action(self, profile):
         logging.info(f'Setting power profile to {profile}')
         subprocess.run(['powerprofilesctl', 'set', profile])
-
     def set_language(self, new_lang):
         set_language(new_lang)
         self.update_texts()
         if self.parent():
             self.parent().update_texts()
-
     def update_wifi_list(self):
         while self.wifi_list_layout.count():
             child = self.wifi_list_layout.takeAt(0)
@@ -404,7 +402,6 @@ class SettingsWindow(QMainWindow):
             label = QLabel(get_text('no_networks'))
             label.setObjectName('list-label')
             self.wifi_list_layout.addWidget(label)
-
     def select_wifi(self, ssid):
         global selected_wifi
         selected_wifi = ssid
@@ -414,7 +411,6 @@ class SettingsWindow(QMainWindow):
                 btn.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #2a2a2a);")
             else:
                 btn.setStyleSheet("")
-
     def connect_wifi(self):
         global selected_wifi
         if not selected_wifi:
@@ -434,7 +430,6 @@ class SettingsWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Warning", get_text('connection_failed', {'error': str(e)}))
             logging.error(f'Error connecting to Wi-Fi: {e}')
-
     def scan_bluetooth(self):
         while self.bluetooth_list_layout.count():
             child = self.bluetooth_list_layout.takeAt(0)
@@ -463,7 +458,6 @@ class SettingsWindow(QMainWindow):
             label = QLabel('No devices found')
             label.setObjectName('list-label')
             self.bluetooth_list_layout.addWidget(label)
-
     def select_bluetooth(self, device_id):
         global selected_bluetooth
         selected_bluetooth = device_id
@@ -473,7 +467,6 @@ class SettingsWindow(QMainWindow):
                 btn.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #2a2a2a);")
             else:
                 btn.setStyleSheet("")
-
     def pair_bluetooth(self):
         global selected_bluetooth
         if not selected_bluetooth:
@@ -494,7 +487,6 @@ class SettingsWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Warning", get_text('pairing_failed', {'error': str(e)}))
             logging.error(f'Error pairing Bluetooth: {e}')
-
     def closeEvent(self, event):
         try:
             if self.parent():
