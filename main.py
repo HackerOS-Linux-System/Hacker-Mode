@@ -1,8 +1,11 @@
 import sys
+import os
 import shutil
 from PySide6.QtWidgets import QApplication, QMessageBox
 from main_window import MainWindow
 import logging
+
+os.environ["QT_QPA_PLATFORM"] = "xcb"  # Force X11 backend
 
 # Define the stylesheet as a string
 STYLESHEET = """
