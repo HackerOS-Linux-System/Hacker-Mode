@@ -4,9 +4,7 @@ import shutil
 from PySide6.QtWidgets import QApplication, QMessageBox
 from main_window import MainWindow
 import logging
-
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
-
 # Define the stylesheet as a string
 STYLESHEET = """
 /* Hacker Launcher Styles - Black, White, Purple, Blue */
@@ -125,7 +123,6 @@ QProgressBar::chunk {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4b0082, stop:1 #6a0dad);
 }
 """
-
 if __name__ == '__main__':
     try:
         gamescope = '--gamescope' in sys.argv
