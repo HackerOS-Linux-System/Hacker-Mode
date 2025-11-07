@@ -3,24 +3,20 @@ import os
 import shutil
 import logging
 from config_manager import ConfigManager
-
 class GameManager:
     def __init__(self, proton_manager):
         self.proton_manager = proton_manager
         self.config_manager = ConfigManager()
-
     def add_game(self, game):
         games = self.config_manager.load_games()
         games.append(game)
         self.config_manager.save_games(games)
         logging.info(f"Added game: {game['name']}")
-
     def remove_game(self, name):
         games = self.config_manager.load_games()
         games = [g for g in games if g['name'] != name]
         self.config_manager.save_games(games)
         logging.info(f"Removed game: {name}")
-
     def launch_game(self, game, gamescope=False):
         runner = game['runner']
         exe = game['exe']
@@ -109,13 +105,13 @@ class GameManager:
                     cmd.extend(['steam', '-applaunch', app_id] + launch_options)
                 else:
                     raise Exception("Steam or Flatpak not installed. Please install Steam (e.g., flatpak install flathub com.valvesoftware.Steam).")
-            else:  # Proton
+            else: # Proton
                 proton_bin = self.proton_manager.get_proton_path(runner)
                 if not os.path.exists(proton_bin):
                     raise Exception(f"Proton binary not found for {runner}")
                 # Set up Steam environment for Proton
                 steam_dir = os.path.expanduser('~/.local/share/Steam')
-                os.makedirs(os.path.join(steam_dir, 'steamapps/compatdata'), exist_ok=True)  # Ensure Steam structure
+                os.makedirs(os.path.join(steam_dir, 'steamapps/compatdata'), exist_ok=True) # Ensure Steam structure
                 env['STEAM_COMPAT_CLIENT_INSTALL_PATH'] = steam_dir
                 env['STEAM_COMPAT_DATA_PATH'] = prefix
                 env['STEAM_RUNTIME'] = os.path.join(steam_dir, 'ubuntu12_32/steam-runtime')
