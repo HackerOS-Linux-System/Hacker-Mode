@@ -8,7 +8,6 @@ import time
 from datetime import datetime
 from config_manager import ConfigManager
 import logging
-
 class ProtonManager:
     def __init__(self):
         self.protons_dir = ConfigManager.protons_dir
@@ -17,35 +16,31 @@ class ProtonManager:
         self.available_official_stable_cache = None
         self.available_official_exp_cache = None
         self.cache_time = 0
-        self.cache_duration = 3600  # 1 hour
-
+        self.cache_duration = 3600 # 1 hour
     def refresh_cache_if_needed(self):
         if time.time() - self.cache_time > self.cache_duration:
             self.available_ge_cache = self.get_available_ge()
             self.available_official_stable_cache = self.get_available_official(stable=True)
             self.available_official_exp_cache = self.get_available_official(stable=False)
             self.cache_time = time.time()
-
     def get_installed_protons(self):
         protons = []
         for d in os.listdir(self.protons_dir):
             if os.path.isdir(os.path.join(self.protons_dir, d)):
                 proton_path = os.path.join(self.protons_dir, d)
                 version = d
-                proton_type = 'GE' if d.startswith('GE-Proton') else 'Official'
+                proton_type = 'GE' if d.startswith('GE-Proton') else 'Experimental' if 'experimental' in d.lower() else 'Official'
                 install_date = datetime.fromtimestamp(os.path.getctime(proton_path)).strftime('%Y-%m-%d')
                 update_info = self.check_update(version, proton_type)
                 status = 'Update Available' if update_info else 'Installed'
                 protons.append({'version': version, 'type': proton_type, 'date': install_date, 'status': status})
         return sorted(protons, key=lambda x: x['version'])
-
     def get_proton_path(self, version):
         base = os.path.join(self.protons_dir, version)
         for root, dirs, files in os.walk(base):
             if 'proton' in files:
                 return os.path.join(root, 'proton')
         raise Exception(f"Proton binary not found in {version}")
-
     def _version_key(self, version):
         version = version.replace('GE-Proton', '').replace('Proton-', '')
         parts = []
@@ -69,7 +64,6 @@ class ProtonManager:
             except ValueError:
                 return part
         return [convert_part(part) for part in parts]
-
     def get_available_ge(self):
         if self.available_ge_cache is not None:
             return self.available_ge_cache
@@ -91,7 +85,6 @@ class ProtonManager:
         print("Failed to fetch GE protons after retries, returning empty list")
         self.available_ge_cache = []
         return []
-
     def get_available_official(self, stable=True):
         if stable and self.available_official_stable_cache is not None:
             return self.available_official_stable_cache
@@ -125,7 +118,6 @@ class ProtonManager:
         else:
             self.available_official_exp_cache = []
         return []
-
     def install_proton(self, version, proton_type, progress_callback=None):
         try:
             repo = 'GloriousEggroll/proton-ge-custom' if proton_type == 'GE' else 'ValveSoftware/Proton'
@@ -192,7 +184,6 @@ class ProtonManager:
             logging.error(f"Error installing {proton_type} proton {version}: {e}")
             print(f"Error installing {proton_type} proton {version}: {e}")
             return False, str(e)
-
     def install_custom_tar(self, tar_path, version, progress_callback=None):
         try:
             extract_dir = os.path.join(self.protons_dir, version)
@@ -226,7 +217,6 @@ class ProtonManager:
             logging.error(f"Error installing custom tar: {e}")
             print(f"Error installing custom tar: {e}")
             return False, str(e)
-
     def install_custom_folder(self, src_folder, version):
         try:
             dest = os.path.join(self.protons_dir, version)
@@ -240,7 +230,6 @@ class ProtonManager:
             logging.error(f"Error installing custom folder: {e}")
             print(f"Error installing custom folder: {e}")
             return False, str(e)
-
     def remove_proton(self, version):
         path = os.path.join(self.protons_dir, version)
         if not os.path.exists(path):
@@ -253,18 +242,16 @@ class ProtonManager:
             logging.error(f"Error removing proton: {e}")
             print(f"Error removing proton: {e}")
             return False
-
     def check_update(self, version, proton_type):
         self.refresh_cache_if_needed()
         if proton_type == 'GE':
             available = self.available_ge_cache
-            if available and available[0] != version:
-                return ('GE', available[0])
         elif proton_type == 'Official':
-            available_stable = self.available_official_stable_cache
-            available_exp = self.available_official_exp_cache
-            available = available_stable + available_exp
-            if available and available[0] != version:
-                new_type = 'Official' if available[0] in available_stable else 'Experimental'
-                return (new_type, available[0])
+            available = self.available_official_stable_cache
+        elif proton_type == 'Experimental':
+            available = self.available_official_exp_cache
+        else:
+            return None
+        if available and available[0] != version:
+            return (proton_type, available[0])
         return None
