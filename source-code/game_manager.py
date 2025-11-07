@@ -27,14 +27,13 @@ class GameManager:
         app_id = game.get('app_id', '')
         prefix = game.get('prefix', '')
         launch_options = game.get('launch_options', '').split()
+        fps_limit = game.get('fps_limit', '')
         env = os.environ.copy()
-
         # Validate inputs
         if runner != 'Steam' and not os.path.exists(exe):
             raise Exception(f"Executable does not exist: {exe}")
         if runner == 'Steam' and not app_id:
             raise Exception("Steam App ID not set")
-
         # Set up environment for Wine/Proton
         if runner in ['Wine'] or 'Proton' in runner:
             if not prefix:
@@ -57,7 +56,6 @@ class GameManager:
             env['WINEESYNC'] = '1' if game.get('enable_esync', self.config_manager.settings['enable_esync']) else '0'
             env['WINEFSYNC'] = '1' if game.get('enable_fsync', self.config_manager.settings['enable_fsync']) else '0'
             env['DXVK_ASYNC'] = '1' if game.get('enable_dxvk_async', self.config_manager.settings['enable_dxvk_async']) else '0'
-
         # Build command
         cmd = []
         if gamescope:
@@ -87,10 +85,12 @@ class GameManager:
             if '--bigpicture' in launch_options:
                 cmd.extend(['-e', '-f'])
                 options_to_remove.append('--bigpicture')
+            if fps_limit:
+                cmd.append('-r')
+                cmd.append(str(fps_limit))
             # Remove processed options
             launch_options = [opt for opt in launch_options if opt not in options_to_remove]
             cmd.append('--')
-
         try:
             if runner == 'Native':
                 cmd.extend([exe] + launch_options)
@@ -115,14 +115,13 @@ class GameManager:
                     raise Exception(f"Proton binary not found for {runner}")
                 # Set up Steam environment for Proton
                 steam_dir = os.path.expanduser('~/.local/share/Steam')
-                os.makedirs(os.path.join(steam_dir, 'steamapps/compatdata'), exist_ok=True)
+                os.makedirs(os.path.join(steam_dir, 'steamapps/compatdata'), exist_ok=True)  # Ensure Steam structure
                 env['STEAM_COMPAT_CLIENT_INSTALL_PATH'] = steam_dir
                 env['STEAM_COMPAT_DATA_PATH'] = prefix
                 env['STEAM_RUNTIME'] = os.path.join(steam_dir, 'ubuntu12_32/steam-runtime')
                 ld_library_path = os.path.join(steam_dir, 'ubuntu12_32') + ':' + os.path.join(steam_dir, 'ubuntu12_64')
                 env['LD_LIBRARY_PATH'] = ld_library_path + ':' + env.get('LD_LIBRARY_PATH', '')
                 cmd.extend([proton_bin, 'waitforexitandrun', exe] + launch_options)
-
             # Execute command
             log_file = os.path.join(self.config_manager.logs_dir, f"{game['name'].replace(' ', '_')}.log")
             with open(log_file, 'w') as f:
