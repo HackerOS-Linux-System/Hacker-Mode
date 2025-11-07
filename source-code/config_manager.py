@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-
 class ConfigManager:
     base_dir = os.path.join(os.path.expanduser('~'), '.hackeros', 'Hacker-Launcher')
     protons_dir = os.path.join(base_dir, 'Protons')
@@ -10,22 +9,19 @@ class ConfigManager:
     logs_dir = os.path.join(base_dir, 'Logs')
     games_file = os.path.join(config_dir, 'games.json')
     settings_file = os.path.join(config_dir, 'settings.json')
-
     def __init__(self):
         os.makedirs(self.config_dir, exist_ok=True)
         os.makedirs(self.prefixes_dir, exist_ok=True)
         os.makedirs(self.protons_dir, exist_ok=True)
         os.makedirs(self.logs_dir, exist_ok=True)
         self.setup_logging()
-        self.settings = self.load_settings()  # Store settings in instance variable
-
+        self.settings = self.load_settings() # Store settings in instance variable
     def setup_logging(self):
         logging.basicConfig(
             filename=os.path.join(self.logs_dir, 'launcher.log'),
-            level=logging.DEBUG,  # Changed to DEBUG for more details
+            level=logging.DEBUG, # Changed to DEBUG for more details
             format='%(asctime)s [%(levelname)s] %(message)s'
         )
-
     def load_games(self):
         if os.path.exists(self.games_file):
             try:
@@ -38,14 +34,12 @@ class ConfigManager:
                 return games
             except (json.JSONDecodeError, IOError, ValueError) as e:
                 logging.error(f"Error loading games.json: {e}")
-                print(f"Error loading games.json: {e}")  # Add console output
+                print(f"Error loading games.json: {e}") # Add console output
                 return []
         return []
-
     def save_games(self, games):
         with open(self.games_file, 'w') as f:
             json.dump(games, f, indent=4)
-
     def load_settings(self):
         default_settings = {
             'fullscreen': True,
@@ -65,9 +59,8 @@ class ConfigManager:
                 default_settings.update(settings)
             except (json.JSONDecodeError, IOError, ValueError) as e:
                 logging.error(f"Error loading settings.json: {e}")
-                print(f"Error loading settings.json: {e}")  # Add console output
+                print(f"Error loading settings.json: {e}") # Add console output
         return default_settings
-
     def save_settings(self, settings):
         with open(self.settings_file, 'w') as f:
             json.dump(settings, f, indent=4)
