@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         about_layout = QVBoxLayout(about_widget)
         about_text = QTextEdit()
         about_text.setReadOnly(True)
-        about_text.setText("Hacker Mode v1.0\nGitHub: https://github.com/your-repo\nA launcher for running games with Proton/Wine easily.")
+        about_text.setText("Hacker Mode v0.9\nGitHub: https://github.com/HackerOS-Linux-System/Hacker-ModenA launcher for running games with Proton/Wine easily.")
         about_layout.addWidget(about_text)
         self.tabs.addTab(about_widget, 'About')
         # Hacker Mode button
