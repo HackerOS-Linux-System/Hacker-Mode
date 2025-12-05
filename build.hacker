@@ -1,0 +1,6 @@
+// valac
+// meson
+
+> cd source-code
+> meson setup build
+> meson compile -C build
