@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hacker Mode
+Comment=Gaming session inspired by the one from SteamOS.
+Exec=cage /usr/lib/Hacker-Mode
+Type=Application
+DesktopNames=HackerOS-Sessions
