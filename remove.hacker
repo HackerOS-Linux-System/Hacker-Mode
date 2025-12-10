@@ -1,1 +1,2 @@
-
+> sudo rm -rf /usr/share/wayland-sessions/Hacker-Mode.desktop
+> sudo rm -rf /usr/lib/HackerOS/
