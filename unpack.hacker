@@ -1,2 +1,3 @@
 > sudo mv /tmp/Hacker-Mode/Hacker-Mode.desktop /usr/share/wayland-sessions/
-> cd /usr/lib/HackerOS/
+> sudo curl -L "https://github.com/HackerOS-Linux-System/Hacker-Mode/releases/download/v0.9/Hacker-Mode" -o /usr/lib/HackerOS/Hacker-Mode && \
+> sudo chmod a+X /usr/lib/HackerOS/Hacker-Mode
