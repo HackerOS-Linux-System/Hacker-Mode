@@ -1,1 +1,2 @@
-
+> sudo mv /tmp/Hacker-Mode/Hacker-Mode.desktop /usr/share/wayland-sessions/
+> cd /usr/lib/HackerOS/
