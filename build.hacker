@@ -1,6 +1,6 @@
-// valac
-// meson
+// npm
+// crystal
 
 > cd source-code
-> meson setup build
-> meson compile -C build
+>>> npm install && npm run build
+>>> crystal build Hacker-Mode.cr --release
