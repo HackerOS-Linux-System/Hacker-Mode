@@ -1,1 +1,36 @@
+{
+  "name": "Hacker-Mode",
+  "version": "1.0.0",
+  "description": "Gaming mode for HackerOS",
+  "author": "HackerOS Team <hackeros068@gmail.com>",
+  "homepage": "https://github.com/TwojeRepozytorium/HackerMode",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^25.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.hackeros.hackermode",
+    "productName": "HackerMode",
+    "files": [
+      "**/*"
+    ],
+    "asar": true,
+    "directories": {
+      "buildResources": "assets"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    }
+  }
+}
 
