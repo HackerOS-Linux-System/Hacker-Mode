@@ -1,9 +1,9 @@
 [package]
 name = "Hacker-Mode-Compositor"
-version = "1.2.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Generated based on Smithay anvil example"]
+authors = ["HackerOS Team <hackeros068@gmail.com>"]
 
 [dependencies]
 bitflags = "2.2.1"
