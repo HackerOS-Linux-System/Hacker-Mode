@@ -1,6 +1,0 @@
-// npm
-// crystal
-
-> cd source-code
->>> npm install && npm run build
->>> crystal build Hacker-Mode.cr --release

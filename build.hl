@@ -1,0 +1,7 @@
+// npm
+// crystal
+
+> cd source-code
+>>> npm install && npm run build
+>>> cd settings && cargo build --release && cd ..
+>>> cd .. && cd composer && cargo build --release
