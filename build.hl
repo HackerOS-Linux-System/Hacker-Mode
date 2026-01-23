@@ -1,5 +1,7 @@
 // npm
 // g++
+// meson
+// ninja
 
 > cd source-code
 >>> npm install && npm run dist
