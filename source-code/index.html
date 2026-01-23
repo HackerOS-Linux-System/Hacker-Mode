@@ -1,72 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0" />
     <title>Hacker Mode</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.9.1/gsap.min.js"></script>
-</head>
-<body class="flex flex-col items-center justify-center h-screen text-white bg-gradient-to-br from-gray-900 to-black overflow-hidden">
-    <h1 class="text-5xl font-bold mb-12 neon-text" id="title">Hacker Mode</h1>
-    <div class="grid grid-cols-4 gap-8">
-        <button class="launcher-btn bg-gray-800 p-6 rounded-xl flex flex-col items-center justify-center w-40 h-40" data-app="steam">
-            <img src="https://store.steampowered.com/favicon.ico" alt="Steam Official Icon" class="w-20 h-20 mb-3">
-            <span class="text-lg">Steam</span>
-        </button>
-        <button class="launcher-btn bg-gray-800 p-6 rounded-xl flex flex-col items-center justify-center w-40 h-40" data-app="heroic">
-            <img src="https://www.heroicgameslauncher.com/favicon.ico" alt="Heroic Games Launcher Official Icon" class="w-20 h-20 mb-3">
-            <span class="text-lg">Heroic</span>
-        </button>
-        <button class="launcher-btn bg-gray-800 p-6 rounded-xl flex flex-col items-center justify-center w-40 h-40" data-app="hyperplay">
-            <img src="https://cdn-icons-png.flaticon.com/512/5968/5968778.png" alt="HyperPlay Icon" class="w-20 h-20 mb-3">
-            <span class="text-lg">HyperPlay</span>
-        </button>
-        <button class="launcher-btn bg-gray-800 p-6 rounded-xl flex flex-col items-center justify-center w-40 h-40" data-app="lutris">
-            <img src="https://lutris.net/static/images/logo.png" alt="Lutris Official Icon" class="w-20 h-20 mb-3">
-            <span class="text-lg">Lutris</span>
-        </button>
-    </div>
-    <div class="absolute bottom-4 left-4 flex space-x-4">
-        <button class="settings-btn bg-gray-900 text-white px-6 py-3 rounded-lg" id="settings-btn">Settings</button>
-        <button class="hacker-menu-btn bg-gray-900 text-white px-6 py-3 rounded-lg" id="hacker-menu-btn">Hacker Menu</button>
-    </div>
-    <div id="hacker-menu" class="hidden absolute bg-gray-900 rounded-lg shadow-lg p-4 z-50">
-        <button class="block w-full text-left px-4 py-2 hover:bg-gray-700 rounded menu-item" onclick="window.electronApi.systemAction('switchToPlasma')" id="menu-switch-to-plasma">Switch to Plasma</button>
-        <button class="block w-full text-left px-4 py-2 hover:bg-gray-700 rounded menu-item" onclick="window.electronApi.systemAction('shutdown')" id="menu-shutdown">Shutdown</button>
-        <button class="block w-full text-left px-4 py-2 hover:bg-gray-700 rounded menu-item" onclick="window.electronApi.systemAction('restart')" id="menu-restart">Restart</button>
-        <button class="block w-full text-left px-4 py-2 hover:bg-gray-700 rounded menu-item" onclick="window.electronApi.systemAction('sleep')" id="menu-sleep">Sleep</button>
-        <button class="block w-full text-left px-4 py-2 hover:bg-gray-700 rounded menu-item" onclick="window.electronApi.systemAction('restartApps')" id="menu-restart-apps">Restart Apps</button>
-        <button class="block w-full text-left px-4 py-2 hover:bg-gray-700 rounded menu-item" onclick="window.electronApi.systemAction('restartSway')" id="menu-restart-sway">Restart Sway</button>
-    </div>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #0f1014;
+        color: #e2e8f0;
+        overflow: hidden;
+        user-select: none;
+      }
+      /* Custom Scrollbar for Steam Deck feel */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1e293b;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #475569;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b;
+      }
+      .glass-panel {
+        background: rgba(30, 41, 59, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+    </style>
     <script>
-        document.querySelectorAll('.launcher-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const appName = btn.getAttribute('data-app');
-                try {
-                    await window.electronApi.launchApp(appName);
-                } catch (e) {
-                    console.error(`Error launching ${appName}: ${e}`);
-                }
-            });
-        });
-        document.getElementById('settings-btn').addEventListener('click', async () => {
-            try {
-                await window.electronApi.launchSettings();
-            } catch (e) {
-                console.error(`Error launching settings: ${e}`);
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              steam: {
+                dark: '#0f1014',
+                panel: '#1b2838',
+                blue: '#1a9fff',
+                blueHover: '#007eff',
+                text: '#c6d4df',
+                highlight: '#66c0f4'
+              }
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'fade-in': 'fadeIn 0.3s ease-out forwards',
+              'slide-up': 'slideUp 0.3s ease-out forwards'
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' }
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(20px)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' }
+              }
             }
-        });
-        document.getElementById('hacker-menu-btn').addEventListener('click', () => {
-            const menu = document.getElementById('hacker-menu');
-            menu.classList.toggle('hidden');
-            gsap.fromTo('#hacker-menu', { opacity: 0, y: -20 }, { opacity: 1, y: 0, duration: 0.5 });
-            document.querySelectorAll('.menu-item').forEach((item, i) => {
-                gsap.from(item, { duration: 0.5, x: -20, opacity: 0, delay: i * 0.1 });
-            });
-        });
+          }
+        }
+      }
     </script>
-</body>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "vite": "https://esm.sh/vite@^7.3.1"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>
-
