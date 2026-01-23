@@ -3,4 +3,4 @@
 
 > cd source-code
 >>> npm install && npm run dist
->>> cd .. && cd composer && 
+>>> cd .. && cd composer && meson setup build && ninja -C build
