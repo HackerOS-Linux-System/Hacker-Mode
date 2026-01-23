@@ -1,36 +1,50 @@
 {
   "name": "Hacker-Mode",
+  "productName": "Hacker Mode",
   "version": "1.0.0",
-  "description": "Gaming mode for HackerOS",
-  "author": "HackerOS Team <hackeros068@gmail.com>",
-  "homepage": "https://github.com/TwojeRepozytorium/HackerMode",
-  "main": "main.js",
+  "description": "A Steam Deck/Gamescope inspired game launcher.",
+  "main": "electron/main.js",
+  "author": "HackerOS",
   "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder"
+    "start": "concurrently -k \"vite\" \"wait-on tcp:3000 && electron .\"",
+    "build": "tsc && vite build",
+    "dist": "npm run build && electron-builder --linux AppImage",
+    "pack": "electron-builder --dir"
   },
-  "dependencies": {},
+  "dependencies": {
+    "lucide-react": "^0.344.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
   "devDependencies": {
-    "electron": "^25.0.0",
-    "electron-builder": "^24.0.0"
+    "@types/node": "^20.11.24",
+    "@types/react": "^18.2.64",
+    "@types/react-dom": "^18.2.21",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.2.2",
+    "vite": "^5.1.4",
+    "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.hackeros.hackermode",
-    "productName": "HackerMode",
-    "files": [
-      "**/*"
-    ],
-    "asar": true,
-    "directories": {
-      "buildResources": "assets"
-    },
+    "appId": "com.hackermode.ui",
+    "productName": "Hacker Mode",
     "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Utility"
-    }
+      "target": "AppImage",
+      "category": "Game",
+      "icon": "icon.png",
+      "executableName": "hacker-mode"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist_electron"
+    },
+    "extends": null
   }
 }
-
