@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { TRANSLATIONS, USER_IMAGE_PATH_SUFFIX, SYSTEM_ICON_PATH } from './constants';
 import { ViewState, Language, AppConfig, AppId } from './types';
 import { StatusBar } from './components/StatusBar';
@@ -17,29 +18,23 @@ const App: React.FC = () => {
         const sysLang = navigator.language.split('-')[0];
         if (sysLang === 'pl') setLang('pl');
 
-        // Attempt to get user home dir via Electron/Node
-        try {
-            if (window.require) {
-                const os = window.require('os');
-                setUserHome(os.homedir());
-            }
-        } catch (e) {
-            console.warn("Could not determine user home directory (not in Electron?)");
-        }
+        // Get user home via Tauri
+        invoke<string>('get_user_home')
+        .then(home => setUserHome(home))
+        .catch(err => console.warn('Could not get user home:', err));
     }, []);
 
     const t = TRANSLATIONS[lang];
 
-    // Helper to construct local file path.
-    // In Electron with webSecurity: false, 'file://' allows absolute paths.
+    // Helper to construct local file path
     const getUserImgPath = (filename: string) => {
-        if (!userHome) return `file://${USER_IMAGE_PATH_SUFFIX}${filename}`; // Fallback or partial
+        if (!userHome) return `file://${USER_IMAGE_PATH_SUFFIX}${filename}`;
             return `file://${userHome}${USER_IMAGE_PATH_SUFFIX}${filename}`;
     };
 
     const getSystemIconPath = (filename: string) => {
         return `file://${SYSTEM_ICON_PATH}${filename}`;
-    }
+    };
 
     const apps: AppConfig[] = [
         {
@@ -76,7 +71,6 @@ const App: React.FC = () => {
 
     return (
         <div className="relative w-screen h-screen overflow-hidden bg-steam-dark text-white selection:bg-steam-blue selection:text-white font-sans">
-
         {/* Background Ambience */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-900/20 via-[#0f1014] to-[#0f1014] z-0 pointer-events-none" />
 
