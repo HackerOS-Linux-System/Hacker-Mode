@@ -1,0 +1,220 @@
+import { HMTheme } from "../theme.slint";
+
+export struct TabItem {
+    label: string,
+    id: string,
+}
+
+export component TopBar inherits Rectangle {
+    height: HMTheme.topbar-height;
+    background: HMTheme.bg-secondary;
+
+    in property <int>           active-tab: 0;
+    in property <[TabItem]>     tabs;
+    in property <string>        proton-version: "GE-Proton9-20";
+    in property <string>        user-initials: "HM";
+    in property <bool>          search-open: false;
+
+    callback tab-changed(int);
+    callback search-requested();
+    callback notifications-clicked();
+    callback profile-clicked();
+
+    // Bottom border
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: HMTheme.border;
+    }
+
+    HorizontalLayout {
+        padding-left: HMTheme.space-lg;
+        padding-right: HMTheme.space-md;
+        spacing: 0px;
+
+        // ── Logo ──────────────────────────────────────────────────────────
+        HorizontalLayout {
+            width: 180px;
+            alignment: start;
+            spacing: HMTheme.space-sm;
+
+            // Hex icon
+            Rectangle {
+                width: 22px;
+                height: 22px;
+
+                Text {
+                    text: "⬡";
+                    color: HMTheme.orange;
+                    font-size: 18px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            Text {
+                text: "HACKER MODE";
+                color: HMTheme.gold;
+                font-size: 15px;
+                font-weight: 700;
+                letter-spacing: 2px;
+                vertical-alignment: center;
+            }
+        }
+
+        // ── Tabs ──────────────────────────────────────────────────────────
+        HorizontalLayout {
+            alignment: start;
+            spacing: 2px;
+
+            for tab[idx] in tabs: TabButton {
+                label: tab.label;
+                active: idx == active-tab;
+                clicked => { tab-changed(idx); }
+            }
+        }
+
+        // ── Right controls ────────────────────────────────────────────────
+        HorizontalLayout {
+            alignment: end;
+            spacing: HMTheme.space-sm;
+
+            // Proton chip
+            Rectangle {
+                width: 110px;
+                height: 24px;
+                border-radius: 12px;
+                background: rgba(245, 166, 35, 0.10);
+                border-width: 1px;
+                border-color: rgba(245, 166, 35, 0.20);
+
+                Text {
+                    text: root.proton-version;
+                    color: HMTheme.gold;
+                    font-size: HMTheme.font-xs;
+                    font-weight: 700;
+                    letter-spacing: 0.5px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Search button
+            IconButton {
+                icon: "⌕";
+                clicked => { search-requested(); }
+            }
+
+            // Notifications
+            IconButton {
+                icon: "🔔";
+                clicked => { notifications-clicked(); }
+            }
+
+            // Avatar
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                border-radius: 14px;
+                background: @linear-gradient(135deg, HMTheme.orange, HMTheme.gold);
+
+                TouchArea {
+                    clicked => { profile-clicked(); }
+                }
+
+                Text {
+                    text: root.user-initials;
+                    color: HMTheme.bg-primary;
+                    font-size: HMTheme.font-xs;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// ── Tab button ────────────────────────────────────────────────────────────────
+
+component TabButton inherits Rectangle {
+    in property <string> label;
+    in property <bool>   active: false;
+    callback clicked();
+
+    width: label-text.preferred-width + 36px;
+    height: HMTheme.topbar-height;
+    background: transparent;
+
+    states [
+        active when active: {
+            background: rgba(245, 166, 35, 0.07);
+            label-text.color: HMTheme.gold;
+            indicator.background: HMTheme.gold;
+        }
+        hover when ta.has-hover: {
+            background: rgba(255, 255, 255, 0.04);
+            label-text.color: HMTheme.text-primary;
+        }
+    ]
+
+    animate background { duration: HMTheme.anim-fast; }
+
+    // Bottom active indicator
+    indicator := Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: transparent;
+        border-radius: 1px;
+        animate background { duration: HMTheme.anim-fast; }
+    }
+
+    label-text := Text {
+        text: label;
+        color: HMTheme.text-muted;
+        font-size: HMTheme.font-md;
+        font-weight: 500;
+        letter-spacing: 0.3px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        animate color { duration: HMTheme.anim-fast; }
+    }
+
+    ta := TouchArea {
+        clicked => { clicked(); }
+    }
+}
+
+// ── Icon button ───────────────────────────────────────────────────────────────
+
+component IconButton inherits Rectangle {
+    in property <string> icon;
+    callback clicked();
+
+    width: 30px;
+    height: 30px;
+    border-radius: HMTheme.radius-sm;
+    background: transparent;
+
+    states [
+        hover when ta.has-hover: {
+            background: HMTheme.bg-elevated;
+            icon-text.color: HMTheme.text-primary;
+        }
+    ]
+
+    animate background { duration: HMTheme.anim-fast; }
+
+    icon-text := Text {
+        text: icon;
+        color: HMTheme.text-muted;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        animate color { duration: HMTheme.anim-fast; }
+    }
+
+    ta := TouchArea {
+        clicked => { clicked(); }
+    }
+}
