@@ -1,0 +1,17 @@
+[package]
+name        = "hm-cli"
+description = "HackerOS Hacker Mode – CLI tool"
+workspace   = ".."
+
+[[bin]]
+name = "hm"
+path = "src/main.rs"
+
+[dependencies]
+hm-core    = { path = "../core" }
+tokio      = { workspace = true }
+clap       = { workspace = true }
+anyhow     = { workspace = true }
+tracing    = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
