@@ -1,0 +1,11 @@
+*.toml linguist-detectable=true
+*.toml linguist-documentation=false
+*.toml linguist-language=TOML
+
+*.service linguist-detectable=true
+*.service linguist-documentation=false
+*.service linguist-language=INI
+
+*.sql linguist-detectable=true
+*.sql linguist-documentation=false
+*.sql linguist-language=SQL
