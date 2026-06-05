@@ -1,0 +1,264 @@
+import { HMTheme } from "../theme.slint";
+
+export struct MenuStore {
+    id: string,
+    label: string,
+    icon: string,
+    color: color,
+}
+
+export struct MenuDesktop {
+    id: string,
+    label: string,
+}
+
+export component HackerMenu inherits Rectangle {
+    // Transparent backdrop covering the whole screen
+    background: rgba(5, 5, 4, 0.82);
+
+    in property <[MenuStore]>   stores;
+    in property <[MenuDesktop]> available-desktops;
+    in property <bool>          night-mode-on: false;
+    in property <string>        network-name: "";
+
+    callback close();
+    callback open-store(string);
+    callback open-settings();
+    callback toggle-night-mode();
+    callback open-network();
+    callback open-compositor-settings();
+    callback power-action(string);      // "shutdown"|"reboot"|"suspend"|"hibernate"|"logout"|"restart_hm"
+    callback switch-desktop(string);    // DE id
+
+    // Clicking the backdrop closes the menu
+    TouchArea { clicked => { close(); } }
+
+    // The menu panel itself (bottom-left, sits above the bottom bar)
+    menu-panel := Rectangle {
+        x: 0px;
+        y: parent.height - self.height - HMTheme.bottombar-height;
+        width: 340px;
+        height: panel-layout.preferred-height + HMTheme.space-lg;
+        background: HMTheme.bg-secondary;
+        border-color: HMTheme.border;
+        border-width: 1px;
+        border-top-right-radius: HMTheme.radius-lg;
+
+        // Prevent clicks on the panel from closing the menu
+        TouchArea {}
+
+        panel-layout := VerticalLayout {
+            padding: HMTheme.space-md;
+            spacing: HMTheme.space-md;
+
+            // ── Header ────────────────────────────────────────────────────
+            HorizontalLayout {
+                spacing: HMTheme.space-sm;
+
+                Text {
+                    text: "⬡";
+                    color: HMTheme.gold;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "HACKER MENU";
+                    color: HMTheme.text-muted;
+                    font-size: HMTheme.font-xs;
+                    font-weight: 700;
+                    letter-spacing: 2px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                // Close button
+                Rectangle {
+                    width: 24px; height: 24px;
+                    border-radius: 12px;
+                    background: HMTheme.bg-elevated;
+                    border-width: 1px;
+                    border-color: HMTheme.border;
+                    Text {
+                        text: "✕";
+                        color: HMTheme.text-muted;
+                        font-size: HMTheme.font-xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { close(); } }
+                }
+            }
+
+            // ── Stores section ────────────────────────────────────────────
+            MenuSection { label: "STORES"; }
+
+            VerticalLayout {
+                spacing: 1px;
+                for store in stores: MenuItem {
+                    icon:  store.icon;
+                    icon-color: store.color;
+                    label: store.label;
+                    arrow: true;
+                    clicked => { open-store(store.id); }
+                }
+            }
+
+            // ── System section ────────────────────────────────────────────
+            MenuSection { label: "SYSTEM"; }
+
+            VerticalLayout {
+                spacing: 1px;
+
+                MenuItem {
+                    icon: "⚙"; label: "Settings"; arrow: true;
+                    clicked => { open-settings(); }
+                }
+                MenuItem {
+                    icon: "◉";
+                    label: night-mode-on ? "Night Mode   ON" : "Night Mode   OFF";
+                    icon-color: night-mode-on ? HMTheme.gold : HMTheme.text-muted;
+                    clicked => { toggle-night-mode(); }
+                }
+                MenuItem {
+                    icon: "⊡"; label: "Compositor"; arrow: true;
+                    clicked => { open-compositor-settings(); }
+                }
+                MenuItem {
+                    icon: "📶";
+                    label: network-name != "" ? network-name : "Network";
+                    arrow: true;
+                    clicked => { open-network(); }
+                }
+            }
+
+            // ── Switch Desktop section (only if DEs available) ────────────
+            if available-desktops.length > 0: MenuSection { label: "SWITCH DESKTOP"; }
+
+            if available-desktops.length > 0: VerticalLayout {
+                spacing: 1px;
+                for de in available-desktops: MenuItem {
+                    icon: "⊞";
+                    label: de.label;
+                    arrow: true;
+                    clicked => { switch-desktop(de.id); }
+                }
+            }
+
+            // ── Power section ─────────────────────────────────────────────
+            MenuSection { label: "POWER"; }
+
+            VerticalLayout {
+                spacing: 1px;
+                MenuItem {
+                    icon: "↺"; label: "Restart Hacker Mode";
+                    clicked => { power-action("restart_hm"); }
+                }
+                MenuItem {
+                    icon: "⏸"; label: "Suspend";
+                    clicked => { power-action("suspend"); }
+                }
+                MenuItem {
+                    icon: "💤"; label: "Hibernate";
+                    clicked => { power-action("hibernate"); }
+                }
+                MenuItem {
+                    icon: "↩"; label: "Reboot";
+                    clicked => { power-action("reboot"); }
+                }
+                MenuItem {
+                    icon: "⏻"; label: "Shut Down";
+                    label-color: HMTheme.error;
+                    icon-color: HMTheme.error;
+                    clicked => { power-action("shutdown"); }
+                }
+                MenuItem {
+                    icon: "→"; label: "Log Out";
+                    clicked => { power-action("logout"); }
+                }
+            }
+        }
+    }
+}
+
+// ── Section label ─────────────────────────────────────────────────────────────
+
+component MenuSection inherits Rectangle {
+    in property <string> label;
+    height: 22px;
+
+    Text {
+        text: label;
+        color: HMTheme.text-muted;
+        font-size: HMTheme.font-xs;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        vertical-alignment: center;
+        x: 4px;
+    }
+}
+
+// ── Menu item ─────────────────────────────────────────────────────────────────
+
+component MenuItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool>   arrow: false;
+    in property <color>  icon-color:  HMTheme.text-muted;
+    in property <color>  label-color: HMTheme.text-primary;
+    callback clicked();
+
+    height: 38px;
+    border-radius: HMTheme.radius-sm;
+    background: transparent;
+
+    states [
+        hover when ta.has-hover: {
+            background: HMTheme.gold-glow;
+            icon-rect.background: rgba(245, 166, 35, 0.12);
+        }
+    ]
+
+    animate background { duration: HMTheme.anim-fast; }
+
+    HorizontalLayout {
+        padding-left: HMTheme.space-sm;
+        padding-right: HMTheme.space-sm;
+        spacing: HMTheme.space-sm;
+        alignment: start;
+
+        icon-rect := Rectangle {
+            width: 26px;
+            height: 26px;
+            border-radius: HMTheme.radius-sm;
+            background: HMTheme.bg-elevated;
+            border-width: 1px;
+            border-color: HMTheme.border;
+            animate background { duration: HMTheme.anim-fast; }
+
+            Text {
+                text: icon;
+                color: icon-color;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: label;
+            color: label-color;
+            font-size: HMTheme.font-sm;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        if arrow: Text {
+            text: "›";
+            color: HMTheme.text-muted;
+            font-size: 16px;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea { clicked => { clicked(); } }
+}
