@@ -1,0 +1,279 @@
+import { HMTheme } from "../theme.slint";
+
+export struct StoreTab {
+    id: string,
+    label: string,
+    url: string,
+    icon: string,
+    color: color,
+    logged-in: bool,
+}
+
+export component StoreBrowserScreen inherits Rectangle {
+    background: HMTheme.bg-primary;
+
+    in property <[StoreTab]> stores;
+    in property <int>        active-store: 0;
+    in property <string>     current-url: "";
+    in property <bool>       loading: false;
+    in property <bool>       can-go-back: false;
+    in property <bool>       can-go-forward: false;
+
+    callback store-selected(int);
+    callback navigate(string);
+    callback go-back();
+    callback go-forward();
+    callback reload();
+    callback login-store(string);
+
+    VerticalLayout {
+        // ── Store tab bar ─────────────────────────────────────────────────
+        Rectangle {
+            height: 48px;
+            background: HMTheme.bg-secondary;
+            border-color: HMTheme.border;
+            border-bottom-width: 1px;
+
+            HorizontalLayout {
+                padding-left: HMTheme.space-md;
+                padding-right: HMTheme.space-md;
+                spacing: 2px;
+                alignment: start;
+
+                for store[i] in stores: StoreTabButton {
+                    store: store;
+                    active: i == active-store;
+                    clicked => { store-selected(i); }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // Login button for current store if not logged in
+                if !stores[active-store].logged-in: Rectangle {
+                    height: 30px;
+                    width: login-text.preferred-width + 24px;
+                    border-radius: HMTheme.radius-sm;
+                    background: rgba(245, 166, 35, 0.10);
+                    border-width: 1px;
+                    border-color: rgba(245, 166, 35, 0.25);
+                    y: 9px;
+
+                    login-text := Text {
+                        text: "Sign In";
+                        color: HMTheme.gold;
+                        font-size: HMTheme.font-sm;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { login-store(stores[active-store].id); }
+                    }
+                }
+            }
+        }
+
+        // ── Navigation bar ────────────────────────────────────────────────
+        Rectangle {
+            height: 42px;
+            background: HMTheme.bg-elevated;
+            border-color: HMTheme.border;
+            border-bottom-width: 1px;
+
+            HorizontalLayout {
+                padding-left: HMTheme.space-sm;
+                padding-right: HMTheme.space-sm;
+                spacing: HMTheme.space-xs;
+                alignment: start;
+
+                NavBtn {
+                    icon: "←";
+                    enabled: can-go-back;
+                    clicked => { go-back(); }
+                }
+                NavBtn {
+                    icon: "→";
+                    enabled: can-go-forward;
+                    clicked => { go-forward(); }
+                }
+                NavBtn {
+                    icon: "↺";
+                    enabled: true;
+                    clicked => { reload(); }
+                }
+
+                // URL bar
+                Rectangle {
+                    height: 30px;
+                    horizontal-stretch: 1;
+                    border-radius: HMTheme.radius-sm;
+                    background: HMTheme.bg-secondary;
+                    border-width: 1px;
+                    border-color: HMTheme.border;
+
+                    // Loading indicator
+                    if loading: Rectangle {
+                        x: 0px; y: parent.height - 2px;
+                        height: 2px;
+                        width: parent.width * 0.6;
+                        background: @linear-gradient(90deg, HMTheme.orange, HMTheme.gold);
+                        border-radius: 1px;
+                    }
+
+                    Text {
+                        x: HMTheme.space-sm;
+                        text: current-url;
+                        color: HMTheme.text-muted;
+                        font-size: HMTheme.font-sm;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        width: parent.width - 16px;
+                    }
+                }
+            }
+        }
+
+        // ── WebView area ──────────────────────────────────────────────────
+        // The actual WRY WebView is rendered natively into this area.
+        // The Slint UI just renders the chrome around it.
+        // The Rust code positions the WebView window to match this rectangle.
+        webview-area := Rectangle {
+            vertical-stretch: 1;
+            background: #ffffff; // white bg while page loads
+
+            // Loading overlay
+            if loading: Rectangle {
+                background: rgba(10, 10, 8, 0.60);
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: HMTheme.space-md;
+
+                    Rectangle {
+                        width: 48px;
+                        height: 48px;
+                        border-radius: 24px;
+                        background: HMTheme.gold-glow;
+                        border-width: 2px;
+                        border-color: HMTheme.gold;
+                        x: (parent.width - self.width) / 2;
+
+                        Text {
+                            text: "⬡";
+                            color: HMTheme.gold;
+                            font-size: 22px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: "Loading store…";
+                        color: HMTheme.text-muted;
+                        font-size: HMTheme.font-md;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Store tab button ──────────────────────────────────────────────────────────
+
+component StoreTabButton inherits Rectangle {
+    in property <StoreTab> store;
+    in property <bool>     active: false;
+    callback clicked();
+
+    width: inner.preferred-width + 24px;
+    height: 48px;
+    background: transparent;
+
+    states [
+        active when active: {
+            background: rgba(245, 166, 35, 0.07);
+            label-text.color: HMTheme.gold;
+        }
+        hover when ta.has-hover && !active: {
+            background: HMTheme.bg-elevated;
+            label-text.color: HMTheme.text-primary;
+        }
+    ]
+
+    animate background { duration: HMTheme.anim-fast; }
+
+    // Bottom indicator
+    Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: active ? store.color : transparent;
+        border-radius: 1px;
+    }
+
+    inner := HorizontalLayout {
+        spacing: 6px;
+        alignment: center;
+
+        Text {
+            text: store.icon;
+            color: store.color;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+
+        label-text := Text {
+            text: store.label;
+            color: HMTheme.text-muted;
+            font-size: HMTheme.font-sm;
+            font-weight: 500;
+            vertical-alignment: center;
+            animate color { duration: HMTheme.anim-fast; }
+        }
+
+        // Logged-in dot
+        if store.logged-in: Rectangle {
+            width: 5px; height: 5px;
+            border-radius: 2.5px;
+            background: HMTheme.success;
+            y: 2px;
+        }
+    }
+
+    ta := TouchArea { clicked => { clicked(); } }
+}
+
+// ── Navigation button ─────────────────────────────────────────────────────────
+
+component NavBtn inherits Rectangle {
+    in property <string> icon;
+    in property <bool>   enabled: true;
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: HMTheme.radius-sm;
+    background: transparent;
+    opacity: enabled ? 1.0 : 0.35;
+
+    states [
+        hover when ta.has-hover && enabled: {
+            background: HMTheme.bg-secondary;
+        }
+    ]
+
+    animate background { duration: HMTheme.anim-fast; }
+
+    Text {
+        text: icon;
+        color: HMTheme.text-muted;
+        font-size: 16px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        clicked => { if (enabled) { clicked(); } }
+    }
+}
