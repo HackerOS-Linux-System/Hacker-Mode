@@ -6,10 +6,10 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
-name        = "hm",
-about       = "HackerOS Hacker Mode CLI",
-version     = env!("CARGO_PKG_VERSION"),
-          author      = "HackerOS Team",
+    name        = "hm",
+    about       = "HackerOS Hacker Mode CLI",
+    version     = env!("CARGO_PKG_VERSION"),
+    author      = "HackerOS Team",
 )]
 struct Cli {
     #[command(subcommand)]
@@ -70,8 +70,8 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-    .with_env_filter(EnvFilter::new("warn"))
-    .init();
+        .with_env_filter(EnvFilter::new("warn"))
+        .init();
 
     let cli = Cli::parse();
 
