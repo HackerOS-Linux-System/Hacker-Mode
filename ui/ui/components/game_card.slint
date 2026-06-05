@@ -1,0 +1,195 @@
+import { HMTheme } from "../theme.slint";
+
+export struct GameCardData {
+    id: string,
+    title: string,
+    cover-image: image,
+    source: string,      // "steam"|"epic"|"gog"|…
+    source-color: color,
+    source-label: string,
+    playtime-h: int,
+    is-running: bool,
+    is-favourite: bool,
+    is-installed: bool,
+    proton-ok: bool,
+}
+
+export component GameCard inherits Rectangle {
+    in property <GameCardData> game;
+    callback play(string);
+    callback open-detail(string);
+    callback toggle-favourite(string);
+
+    border-radius: HMTheme.radius-md;
+    background: HMTheme.bg-elevated;
+    border-width: 1px;
+    border-color: HMTheme.border;
+    clip: true;
+
+    states [
+        hover when ta.has-hover: {
+            border-color: rgba(245, 166, 35, 0.30);
+            shadow.opacity: 1.0;
+            play-overlay.opacity: 1.0;
+        }
+        running when game.is-running: {
+            border-color: rgba(52, 211, 153, 0.40);
+        }
+    ]
+
+    animate border-color { duration: HMTheme.anim-fast; }
+
+    VerticalLayout {
+        // ── Cover area ────────────────────────────────────────────────────
+        cover-area := Rectangle {
+            height: self.width * 4 / 3;  // 3:4 aspect ratio
+            background: @linear-gradient(160deg, #1e1a14, #120d08);
+            clip: true;
+
+            if game.cover-image.width > 0: Image {
+                source: game.cover-image;
+                image-fit: cover;
+                width: 100%;
+                height: 100%;
+            }
+
+            // Running indicator overlay
+            if game.is-running: Rectangle {
+                background: rgba(52, 211, 153, 0.15);
+            }
+
+            // Play overlay (on hover)
+            play-overlay := Rectangle {
+                background: @linear-gradient(180deg, transparent 40%, rgba(0,0,0,0.75) 100%);
+                opacity: 0.0;
+                animate opacity { duration: HMTheme.anim-fast; }
+
+                // Play button (centered bottom)
+                Rectangle {
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height - self.height - 10px;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 16px;
+                    background: HMTheme.gold;
+
+                    Text {
+                        text: "▶";
+                        color: HMTheme.bg-primary;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        // slight offset for optical centering of play glyph
+                        x: 2px;
+                    }
+
+                    TouchArea {
+                        clicked => { play(game.id); }
+                    }
+                }
+            }
+
+            // Favourite star
+            Rectangle {
+                x: parent.width - self.width - 6px;
+                y: 6px;
+                width: 26px;
+                height: 26px;
+                border-radius: 13px;
+                background: rgba(10, 10, 8, 0.60);
+                opacity: game.is-favourite || fav-ta.has-hover ? 1.0 : 0.0;
+                animate opacity { duration: HMTheme.anim-fast; }
+
+                Text {
+                    text: game.is-favourite ? "★" : "☆";
+                    color: game.is-favourite ? HMTheme.gold : HMTheme.text-muted;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fav-ta := TouchArea {
+                    clicked => { toggle-favourite(game.id); }
+                }
+            }
+
+            // Source dot (top-left)
+            Rectangle {
+                x: 6px;
+                y: 6px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: game.source-color;
+            }
+        }
+
+        // ── Info area ─────────────────────────────────────────────────────
+        Rectangle {
+            height: 52px;
+            HorizontalLayout {
+                padding-left: HMTheme.space-sm;
+                padding-right: HMTheme.space-sm;
+                padding-top: 7px;
+                padding-bottom: 7px;
+
+                VerticalLayout {
+                    spacing: 3px;
+                    horizontal-stretch: 1;
+
+                    Text {
+                        text: game.title;
+                        color: HMTheme.text-primary;
+                        font-size: HMTheme.font-sm;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 5px;
+                            height: 5px;
+                            border-radius: 2.5px;
+                            background: game.source-color;
+                            y: 3px;
+                        }
+
+                        Text {
+                            text: game.source-label;
+                            color: HMTheme.text-muted;
+                            font-size: HMTheme.font-xs;
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+
+                        if game.playtime-h > 0: Text {
+                            text: game.playtime-h + "h";
+                            color: HMTheme.text-muted;
+                            font-size: HMTheme.font-xs;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Hover shadow glow
+    shadow := Rectangle {
+        x: 0px; y: 0px;
+        width: parent.width;
+        height: parent.height;
+        border-radius: HMTheme.radius-md;
+        border-width: 1px;
+        border-color: rgba(245, 166, 35, 0.20);
+        background: transparent;
+        opacity: 0.0;
+        animate opacity { duration: HMTheme.anim-fast; }
+    }
+
+    ta := TouchArea {
+        double-clicked => { open-detail(game.id); }
+    }
+}
