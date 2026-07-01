@@ -1,7 +1,0 @@
-[Unit]
-Description=HackerOS Hacker Mode
-Requires=hackeros-hm-compositor.service hackeros-hm-ui.service
-After=hackeros-hm-compositor.service hackeros-hm-ui.service
-
-[Install]
-WantedBy=graphical-session.target
