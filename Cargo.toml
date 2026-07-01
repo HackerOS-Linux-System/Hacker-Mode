@@ -1,78 +1,53 @@
-[workspace]
-members = ["compositor", "ui", "core", "cli"]
-resolver = "2"
+[package]
+name = "hacker-mode"
+version = "0.1.0"
+description = "Niezależny tryb Big Picture: Steam/Epic/GOG/Amazon + własny kompozytor"
+edition = "2021"
+default-run = "hacker-mode"
 
-[workspace.package]
-version    = "0.1.0"
-edition    = "2021"
-authors    = ["HackerOS Team"]
-license    = "GPL-3.0-or-later"
-rust-version = "1.79"
+[[bin]]
+name = "hacker-mode"
+path = "src/main.rs"
 
-[workspace.dependencies]
-# ── Async ────────────────────────────────────────────────────────────────────
-tokio        = { version = "1",    features = ["full"] }
-tokio-stream = { version = "0.1",  features = ["sync"] }
-futures      = "0.3"
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
 
-# ── Compositor ───────────────────────────────────────────────────────────────
-smithay = { version = "0.3", default-features = false, features = [
+[dependencies]
+tauri = { version = "2" }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+walkdir = "2"
+regex = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Bluetooth (BlueZ przez D-Bus)
+bluer = { version = "0.17", features = ["bluetoothd"] }
+zbus = "4"
+
+# --- kompozytor (tylko w trybie "default") ---
+smithay = { version = "0.4", default-features = false, features = [
     "backend_drm",
     "backend_gbm",
-    "backend_egl",
     "backend_libinput",
-    "backend_udev",
     "backend_session_libseat",
+    "backend_udev",
+    "backend_winit",     # zapasowy backend do developmentu w oknie
+    "wayland_frontend",
     "xwayland",
     "renderer_gl",
-    "renderer_pixman",
-    "wayland_frontend",
-    "desktop",
 ] }
-calloop             = { version = "0.13", features = ["executor"] }
-wayland-server      = "0.31"
-wayland-protocols   = { version = "0.32", features = ["server", "staging", "unstable"] }
-xkbcommon           = { version = "0.7", features = ["wayland"] }
-drm                 = "0.12"
-gbm                 = "0.15"
-input               = "0.9"
+calloop = "0.13"
 
-# ── UI ───────────────────────────────────────────────────────────────────────
-slint = { version = "1.7", features = ["compat-1-2"] }
-
-# ── WebView ──────────────────────────────────────────────────────────────────
-wry = { version = "0.43", features = ["transparent", "devtools"] }
-tao = "0.29"
-
-# ── HTTP / OAuth ─────────────────────────────────────────────────────────────
-reqwest  = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-oauth2   = "4"
-url      = "2"
-
-# ── Database ─────────────────────────────────────────────────────────────────
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "migrate", "macros", "time"] }
-
-# ── Serialization ────────────────────────────────────────────────────────────
-serde       = { version = "1",   features = ["derive"] }
-serde_json  = "1"
-toml        = "0.8"
-
-# ── D-Bus / systemd ──────────────────────────────────────────────────────────
-zbus       = { version = "4", features = ["tokio"] }
-
-# ── IPC ──────────────────────────────────────────────────────────────────────
-jsonrpsee = { version = "0.23", features = ["server", "client-core", "ws-client"] }
-
-# ── Misc ─────────────────────────────────────────────────────────────────────
-anyhow          = "1"
-thiserror       = "1"
-tracing         = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-keyring         = "2"
-dirs            = "5"
-time            = { version = "0.3", features = ["serde"] }
-uuid            = { version = "1",   features = ["v4", "serde"] }
-regex           = "1"
-vdf_reader      = "0.1"
-notify          = "6"
-clap            = { version = "4",   features = ["derive"] }
+[profile.release]
+lto = true
+opt-level = 3
+strip = true
