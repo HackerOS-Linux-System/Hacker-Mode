@@ -9,4 +9,3 @@
 ;; install mising dependeces
 ;; > sudo apt install libwebkit2gtk-4.1-dev
 ;; > sudo apt install libsoup-3.0-dev
-;; > sudo apt install liblibsoup-3.0-dev 
