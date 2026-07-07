@@ -11,3 +11,4 @@
 ;; > sudo apt install libsoup-3.0-dev
 ;; > sudo apt install libinput-dev 
 ;; > sudo apt install libgbm-dev
+;; > sudo apt install libseat-dev
