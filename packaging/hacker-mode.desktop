@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Hacker Mode
-Comment=Big Picture: Steam, Epic, GOG, Amazon i gry ręczne (Proton/native)
-Exec=/usr/bin/hacker-mode-session
-Type=Application
-DesktopNames=Hacker-Mode
