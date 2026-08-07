@@ -1,75 +1,69 @@
-# Hacker Mode — Makefile
-#
-# Skraca budowanie/instalację jednej binarki `hacker-mode` (Tauri + Svelte +
-# Rust) oraz jej dwóch trybów uruchomienia ("ui" / "default" przez SDDM).
-
-SHELL := /bin/bash
-
 PREFIX      ?= /usr/local
-BINDIR      := $(PREFIX)/bin
-SESSIONDIR  := /usr/share/wayland-sessions
-BIN_NAME    := hacker-mode
-TARGET_BIN  := target/release/$(BIN_NAME)
+BUILD_DIR   := build
+FRONTEND    := source-code/frontend
+BACKEND     := source-code/backend/src-tauri
 
-UI_DIR := ui
+.PHONY: all frontend backend backend-dev dev install uninstall clean check test check-comphwde
 
-.PHONY: help deps ui-install ui-build build dev run-ui run-default \
-        install uninstall clean fmt check
+all: frontend backend
 
-help: ## Pokaż listę dostępnych komend
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+## --- Frontend (Solid.js + TypeScript) -----------------------------------
 
-deps: ## Sprawdź obecność narzędzi/bibliotek wymaganych do budowy
-	@command -v cargo >/dev/null || { echo "Brak cargo (Rust). Zainstaluj: https://rustup.rs"; exit 1; }
-	@command -v npm   >/dev/null || { echo "Brak npm/node.js"; exit 1; }
-	@pkg-config --exists webkit2gtk-4.1 2>/dev/null || \
-		echo "UWAGA: nie znaleziono webkit2gtk-4.1 przez pkg-config — build Tauri może się nie powieść."
-	@echo "Zależności OK."
+frontend:
+	cd $(FRONTEND) && npm install && npm run build
 
-ui-install: ## Zainstaluj zależności npm frontendu (Svelte)
-	cd $(UI_DIR) && npm install
+## --- Backend (Tauri: `hacker-mode`) + IPC CLI (`hacker-mode-ipcctl`) -----
+# Jeden `cargo build --workspace` buduje obie binarki tego repozytorium -
+# `hacker-mode` (pakiet `source-code/backend/src-tauri`) i
+# `hacker-mode-ipcctl` (pakiet `ipc`) - żadna z nich nie wymaga niczego
+# z repozytorium HWDE do zbudowania.
 
-ui-build: ui-install ## Zbuduj frontend (Vite -> ui/dist)
-	cd $(UI_DIR) && npm run build
+backend: frontend
+	cargo build --release --workspace
 
-build: ui-build ## Pełny build release (frontend + Rust)
-	cargo build --release
-	@echo "Gotowe: $(TARGET_BIN)"
+backend-dev: frontend
+	cargo build --workspace
 
-check: ## Szybka weryfikacja kompilacji Rust bez pełnego linkowania (cargo check)
-	cargo check
+## --- Tryb deweloperski: uruchamia tylko powłokę Tauri w oknie ------------
 
-fmt: ## Sformatuj kod Rust
-	cargo fmt
+dev: frontend
+	cargo run -p hacker-mode -- dev
 
-dev: ## Tryb deweloperski: vite dev server + `cargo run -- ui` w jednym terminalu
-	@trap 'kill 0' EXIT; \
-	( cd $(UI_DIR) && npm run dev ) & \
-	sleep 2; \
-	cargo run -- ui
+## --- Testy jednostkowe (ipc + logika sklepów/launchera w backendzie) -----
 
-run-ui: build ## Uruchom lokalnie w trybie okienkowym (bez instalacji systemowej)
-	./$(TARGET_BIN) ui
+test:
+	cargo test -p hacker-mode-ipc
+	cargo test -p hacker-mode
 
-run-default: build ## Uruchom lokalnie w trybie kompozytora (wymaga uprawnień seat/DRM, patrz README)
-	./$(TARGET_BIN) default
+check:
+	cargo check --workspace
+	cd $(FRONTEND) && npm run check
 
-install: build ## Zainstaluj binarkę + sesję SDDM w systemie (wymaga sudo)
-	install -Dm755 $(TARGET_BIN) $(DESTDIR)$(BINDIR)/$(BIN_NAME)
-	install -Dm755 packaging/hacker-mode-session $(DESTDIR)$(BINDIR)/hacker-mode-session
-	install -Dm644 packaging/hacker-mode.desktop $(DESTDIR)$(SESSIONDIR)/hacker-mode.desktop
-	@sed -i "s|/usr/bin/hacker-mode|$(BINDIR)/hacker-mode|g" \
-		$(DESTDIR)$(BINDIR)/hacker-mode-session \
-		$(DESTDIR)$(SESSIONDIR)/hacker-mode.desktop
-	@echo "Zainstalowano. Sesja 'Hacker Mode' powinna być teraz dostępna w SDDM."
+## --- Instalacja systemowa -------------------------------------------------
+# Instaluje: binarki `hacker-mode` i `hacker-mode-ipcctl` (obie zbudowane
+# lokalnie, z tego repozytorium), plik sesji dla menedżerów logowania
+# (SDDM/GDM/LightDM przez wayland-sessions) oraz skrypt startowy do
+# uruchamiania z gołego TTY. WYMAGA jedynie osobno zainstalowanej binarki
+# `comphwde` (projekt HWDE) w PATH w czasie działania sesji - patrz
+# `check-comphwde` i README.
 
-uninstall: ## Odinstaluj z systemu
-	rm -f $(DESTDIR)$(BINDIR)/$(BIN_NAME)
-	rm -f $(DESTDIR)$(BINDIR)/hacker-mode-session
-	rm -f $(DESTDIR)$(SESSIONDIR)/hacker-mode.desktop
-	@echo "Odinstalowano."
+check-comphwde:
+	@command -v comphwde >/dev/null || { echo "Brak 'comphwde' w PATH - zainstaluj projekt HWDE (patrz README, sekcja 'Zależność: comphwde') przed uruchomieniem sesji Hacker Mode. Budowa samego Hacker Mode ('make all') tego nie wymaga."; exit 1; }
 
-clean: ## Wyczyść artefakty budowania (Rust + frontend)
+install: all
+	install -Dm755 target/release/hacker-mode          $(DESTDIR)$(PREFIX)/bin/hacker-mode
+	install -Dm755 target/release/hacker-mode-ipcctl    $(DESTDIR)$(PREFIX)/bin/hacker-mode-ipcctl
+	install -Dm755 scripts/hacker-mode-session          $(DESTDIR)$(PREFIX)/bin/hacker-mode-session
+	install -Dm644 scripts/hacker-mode.desktop          $(DESTDIR)/usr/share/wayland-sessions/hacker-mode.desktop
+	@echo "Zainstalowano. Sesję 'Hacker Mode' powinno być widać na ekranie logowania (SDDM/GDM/LightDM)."
+	@echo "Do uruchomienia sesji potrzebna jest jeszcze binarka 'comphwde' (projekt HWDE) w PATH - patrz README ('make check-comphwde' sprawdzi)."
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/hacker-mode
+	rm -f $(DESTDIR)$(PREFIX)/bin/hacker-mode-ipcctl
+	rm -f $(DESTDIR)$(PREFIX)/bin/hacker-mode-session
+	rm -f $(DESTDIR)/usr/share/wayland-sessions/hacker-mode.desktop
+
+clean:
 	cargo clean
-	rm -rf $(UI_DIR)/dist $(UI_DIR)/node_modules
+	rm -rf $(FRONTEND)/dist $(FRONTEND)/node_modules
