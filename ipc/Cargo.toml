@@ -1,0 +1,16 @@
+[package]
+name = "hacker-mode-ipc"
+version = "0.3.0"
+edition = "2021"
+description = "IPC client for talking to comphwde (github.com/HackerOS-Linux-System/HWDE) running as `comphwde --extern-hacker-mode`. Deliberately self-contained: this crate vendors its own copy of comphwde's `--extern-<name>` wire protocol (see module docs) instead of depending on the HWDE/comphwde repository, so that building Hacker Mode never requires checking out or compiling any part of HWDE - only having a `comphwde` binary installed at runtime (see the top-level README's 'Zależność: comphwde' section)."
+license = "GPL-3.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+
+[[bin]]
+name = "hacker-mode-ipcctl"
+path = "src/bin/ipcctl.rs"
