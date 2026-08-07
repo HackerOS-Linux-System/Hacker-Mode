@@ -1,0 +1,28 @@
+#!/usr/bin/hl
+# Podstawowa walidacja pliku hacker-mode.desktop bez zależności od
+# `desktop-file-validate` (może nie być zainstalowane) — sprawdza obecność
+# wymaganych kluczy zgodnie ze specyfikacją freedesktop.org dla plików sesji
+# w /usr/share/wayland-sessions/.
+set -euo pipefail
+FILE="$(dirname "$0")/hacker-mode.desktop"
+
+require_key() {
+  if ! grep -q "^$1=" "$FILE"; then
+    echo "BRAK wymaganego klucza: $1" >&2
+    exit 1
+  fi
+}
+
+echo "Walidacja $FILE ..."
+require_key "Name"
+require_key "Exec"
+require_key "Type"
+
+if ! grep -q "^Type=Application$" "$FILE"; then
+  echo "Type musi być 'Application'" >&2
+  exit 1
+fi
+
+echo "OK — plik zawiera wymagane klucze (Name, Exec, Type=Application)."
+echo "Uwaga: to tylko walidacja składni. Realne działanie z SDDM/GDM/LightDM"
+echo "trzeba sprawdzić na docelowym systemie — patrz docs/TESTING_SESSION.md."
