@@ -1,0 +1,74 @@
+[package]
+name = "hacker-mode"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Hacker Mode — backend (Tauri): logika gier, sklepów, ustawień systemowych i trybu wrapper."
+default-run = "hacker-mode"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Kompozytor to teraz `comphwde --extern-hacker-mode` (projekt HWDE), a
+# nie własny `hacker-mode-compositor` — patrz workspace Cargo.toml i
+# README. `hacker-mode-ipc` to WŁASNY, samodzielny crate tego
+# repozytorium (`ipc/`) - NIE zależność od repozytorium HWDE (patrz jego
+# Cargo.toml/moduł docs dla uzasadnienia); budowanie backendu nigdy nie
+# wymaga checkoutu ani kompilacji HWDE.
+hacker-mode-ipc = { path = "../../../ipc" }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-single-instance = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+anyhow = "1"
+thiserror = "1"
+dirs = "5"
+sysinfo = "0.30"
+which = "6"
+regex = "1"
+walkdir = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# Uwaga: format VDF (Valve KeyValue) używany przez Steam parsujemy własnym,
+# minimalnym parserem w `commands/stores/steam.rs` zamiast dodawać
+# zewnętrzną zależność — format jest prosty, a to ogranicza ryzyko
+# niezgodności API w środowisku bez możliwości `cargo check`.
+
+[lib]
+name = "hacker_mode_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "hacker-mode"
+path = "src/main.rs"
+
+[features]
+# BUGFIX: musi być domyślnie włączone. Bez tego (jak było wcześniej)
+# zwykłe `cargo build --release` (tak jak robi to Makefile — nie
+# `cargo tauri build`, które samo dorzuca tę flagę) produkuje binarkę,
+# która ZAWSZE próbuje wczytać `build.devUrl` z tauri.conf.json
+# (http://localhost:1420) zamiast spakowanego frontendu z
+# `frontendDist`, niezależnie od profilu release/debug — stąd błąd
+# "Could not connect to localhost: Connection refused" i czarny
+# ekran/brak UI przy każdym normalnym uruchomieniu poza `npm run tauri
+# dev`. `custom-protocol` to właśnie ta flaga, która przełącza webview
+# na wczytywanie z paczki (`asset://`) zamiast z dev-servera Vite.
+default = ["custom-protocol"]
+# Kompilacja bez faktycznego uruchamiania webview Tauri — używana przez
+# `cargo check`/testy jednostkowe logiki sklepów/launchera w CI bez
+# zainstalowanego webkit2gtk. `cargo check --no-default-features` w razie
+# potrzeby pomija `custom-protocol` też (nie jest ono wymagane do samego
+# typechecku).
+custom-protocol = ["tauri/custom-protocol"]
