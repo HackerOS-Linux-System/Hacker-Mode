@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Skrypt startowy sesji "Hacker Mode", uruchamiany przez menedżer logowania
+# (SDDM/GDM/LightDM) poprzez plik hacker-mode.desktop, albo ręcznie z TTY.
+#
+# Sesję Wayland zapewnia teraz `comphwde` (projekt HWDE), uruchomiony jako
+# `comphwde --extern-hacker-mode` - dokładnie tak samo jak SDE go używa
+# (`comphwde --extern-sde`). Ten skrypt:
+#   1. startuje comphwde,
+#   2. czeka aż wystawi swoje gniazdo IPC (`--extern-hacker-mode`),
+#   3. prosi je (przez `hacker-mode-ipcctl launch`) o odpalenie powłoki
+#      `hacker-mode` JAKO SWOJEGO klienta Wayland,
+#   4. kończy sesję, gdy comphwde się zamknie (a ono samo się zamyka, gdy
+#      powłoka poprosi je o to przy zamknięciu okna - patrz
+#      `main.rs`'s `on_window_event(Destroyed)`).
+#
+# BUGFIX (v0.2 -> v0.3): stara wersja tego skryptu odpalała
+# `hacker-mode-compositor` i CZEKAŁA na zmienną `WAYLAND_DISPLAY` w
+# swoim WŁASNYM środowisku:
+#
+#     if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S ".../${WAYLAND_DISPLAY}" ]; then break; fi
+#
+# To nigdy nie mogło zadziałać - `hacker-mode-compositor` ustawiał
+# `WAYLAND_DISPLAY` tylko we WŁASNYM procesie (i procesach, które sam
+# spawnował), a proces potomny nie może zmieniać środowiska swojego
+# rodzica (tego skryptu). Pętla więc zawsze po prostu czekała pełne 10s,
+# po czym i tak uruchamiała `hacker-mode` BEZ ustawionego
+# `WAYLAND_DISPLAY` - stąd czarny ekran / błędna sesja. Naprawione przez
+# czekanie na coś, co ten skrypt FAKTYCZNIE widzi (plik gniazda IPC), i
+# przez nieustawianie `WAYLAND_DISPLAY` ręcznie w ogóle - `LaunchApp`
+# (przez `hacker-mode-ipcctl launch`) ustawia je poprawnie za nas, bo
+# comphwde spawnuje `hacker-mode` samodzielnie jako swojego klienta.
+
+set -euo pipefail
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=HackerMode
+export XDG_SESSION_DESKTOP=HackerMode
+
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/hacker-mode"
+mkdir -p "$LOG_DIR"
+
+# Ta sama logika co `sde_ipc::runtime_dir()`/`socket_path_for` po stronie
+# Rust (comphwde/sde/ipc/src/lib.rs) - musi się z nią zgadzać co do bajtu,
+# inaczej ten skrypt będzie czekał na gniazdo, którego comphwde nigdy nie
+# stworzy pod tą ścieżką.
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  IPC_SOCK="${XDG_RUNTIME_DIR}/sde/comphwde-hacker-mode.sock"
+else
+  IPC_SOCK="/tmp/sde-$(id -u)/comphwde-hacker-mode.sock"
+fi
+
+# `comphwde` pochodzi z osobnego projektu HWDE (musi być zainstalowany
+# oddzielnie - patrz README, "Zależność: comphwde"). `hacker-mode-ipcctl`
+# i `hacker-mode` są częścią TEGO repozytorium (pakiet `ipc` i
+# `source-code/backend/src-tauri`) - `make install` instaluje obie razem,
+# więc jeśli ich brakuje w PATH, to najpewniej `make install` się nie
+# powiodło albo nie zostało jeszcze uruchomione, nie brak HWDE.
+for bin in comphwde hacker-mode-ipcctl hacker-mode; do
+  command -v "$bin" >/dev/null || {
+    echo "Brak '$bin' w PATH. 'comphwde' pochodzi z osobnego projektu HWDE (zainstaluj go osobno - patrz README). 'hacker-mode-ipcctl' i 'hacker-mode' są częścią tego repozytorium - uruchom 'sudo make install'." >&2
+    exit 1
+  }
+done
+
+comphwde --extern-hacker-mode >"$LOG_DIR/compositor.log" 2>&1 &
+COMPOSITOR_PID=$!
+
+cleanup() {
+  kill "$COMPOSITOR_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Poczekaj, aż comphwde wystawi gniazdo IPC trybu --extern-hacker-mode
+# (do 10s) - w przeciwieństwie do WAYLAND_DISPLAY, to jest coś, co ten
+# skrypt faktycznie może zaobserwować z zewnątrz procesu comphwde.
+ready=0
+for _ in $(seq 1 100); do
+  if [ -S "$IPC_SOCK" ]; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "$COMPOSITOR_PID" 2>/dev/null; then
+    echo "comphwde zakończył się przedwcześnie - sprawdź $LOG_DIR/compositor.log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+if [ "$ready" -ne 1 ]; then
+  echo "comphwde nie wystawił gniazda IPC ($IPC_SOCK) w ciągu 10s - sprawdź $LOG_DIR/compositor.log" >&2
+  exit 1
+fi
+
+# Poproś comphwde o odpalenie powłoki `hacker-mode` jako WŁASNEGO klienta
+# Wayland - dostaje wtedy poprawny WAYLAND_DISPLAY bez żadnych
+# zgadywanek. `hacker-mode-ipcctl` tylko WYSYŁA to żądanie i od razu
+# kończy działanie - `hacker-mode` startuje jako proces potomny comphwde
+# (jego stdout/stderr lądują więc w $LOG_DIR/compositor.log, razem z
+# logami samego comphwde, nie w osobnym pliku). `hacker-mode` sam
+# poprosi comphwde o zamknięcie przy zamknięciu swojego okna (patrz
+# main.rs), co kończy `wait` poniżej.
+if ! hacker-mode-ipcctl launch hacker-mode; then
+  echo "Nie udało się poprosić comphwde o uruchomienie powłoki - sprawdź $LOG_DIR/compositor.log" >&2
+  exit 1
+fi
+
+# Sesja trwa, dopóki żyje comphwde.
+wait "$COMPOSITOR_PID"
