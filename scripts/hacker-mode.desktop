@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Hacker Mode
+Comment=Sesja do gier — Steam, Epic, GOG, Amazon Games i Lutris w jednej binarce
+Exec=hacker-mode-session
+TryExec=hacker-mode-session
+Type=Application
