@@ -1,9 +1,7 @@
-// make
+#!/usr/bin/hl
 // npm
 // cargo
 // rustc
-
-> make
 
 ;; install mising dependeces
 ;; > sudo apt install libwebkit2gtk-4.1-dev
@@ -11,3 +9,190 @@
 ;; > sudo apt install libinput-dev 
 ;; > sudo apt install libgbm-dev
 ;; > sudo apt install libseat-dev
+
+using <gen 2>
+
+# <main/colors>
+
+% PREFIX: str     = /usr/local
+% BUILD_DIR: str  = build
+% FRONTEND: str   = source-code/frontend
+% BACKEND: str    = source-code/backend/src-tauri
+
+;; Nadpisanie PREFIX z argumentów / środowiska (opcjonalne)
+> printenv PREFIX |> @env_prefix
+? ok
+    % PREFIX = @env_prefix
+done
+
+: log def
+    ~> [make.hl] @msg
+done
+
+: help def
+    ~> Dostępne targety:
+    ~>   all            - frontend + backend (release)
+    ~>   frontend       - zbuduj Solid.js + TypeScript
+    ~>   backend        - cargo build --release --workspace
+    ~>   backend-dev    - cargo build --workspace
+    ~>   dev            - uruchom Tauri w trybie deweloperskim
+    ~>   test           - testy jednostkowe
+    ~>   check          - cargo check + npm check
+    ~>   check-comphwde - sprawdź czy comphwde jest w PATH
+    ~>   install        - instalacja systemowa
+    ~>   uninstall      - odinstalowanie
+    ~>   clean          - wyczyść artefakty
+done
+
+: frontend def
+    -- log
+    ~> Building frontend (Solid.js + TypeScript)...
+    > cd @FRONTEND && npm install && npm run build
+    ? err
+        ::red Frontend build failed
+        > exit 1
+    done
+    ::green Frontend OK
+done
+
+: backend def
+    -- frontend
+    -- log
+    ~> Building backend (Tauri + ipcctl) --release...
+    > cargo build --release --workspace
+    ? err
+        ::red Backend build failed
+        > exit 1
+    done
+    ::green Backend OK
+done
+
+: backend-dev def
+    -- frontend
+    -- log
+    ~> Building backend (dev)...
+    > cargo build --workspace
+    ? err
+        ::red Backend-dev build failed
+        > exit 1
+    done
+    ::green Backend-dev OK
+done
+
+: all def
+    -- frontend
+    -- backend
+    ::green all: finished
+done
+
+: dev def
+    -- frontend
+    -- log
+    ~> Starting Tauri in dev mode...
+    > cargo run -p hacker-mode -- dev
+done
+
+: test def
+    -- log
+    ~> Running tests...
+    > cargo test -p hacker-mode-ipc
+    > cargo test -p hacker-mode
+    ? err
+        ::red Tests failed
+        > exit 1
+    done
+    ::green Tests OK
+done
+
+: check def
+    -- log
+    ~> Checking...
+    > cargo check --workspace
+    > cd @FRONTEND && npm run check
+    ? err
+        ::red Check failed
+        > exit 1
+    done
+    ::green Check OK
+done
+
+: check-comphwde def
+    ::which comphwde
+    ? err
+        ::red Brak 'comphwde' w PATH - zainstaluj projekt HWDE (patrz README, sekcja 'Zależność: comphwde') przed uruchomieniem sesji Hacker Mode.
+        ::red Budowa samego Hacker Mode ('hl make.hl all') tego nie wymaga.
+        > exit 1
+    done
+    ::green comphwde found in PATH
+done
+
+: install def
+    -- all
+    -- log
+    ~> Installing...
+
+    > install -Dm755 target/release/hacker-mode $(DESTDIR)@PREFIX/bin/hacker-mode
+    > install -Dm755 target/release/hacker-mode-ipcctl $(DESTDIR)@PREFIX/bin/hacker-mode-ipcctl
+    > install -Dm755 scripts/hacker-mode-session $(DESTDIR)@PREFIX/bin/hacker-mode-session
+    > install -Dm644 scripts/hacker-mode.desktop $(DESTDIR)/usr/share/wayland-sessions/hacker-mode.desktop
+
+    ::green Zainstalowano. Sesję 'Hacker Mode' powinno być widać na ekranie logowania (SDDM/GDM/LightDM).
+    ::yellow Do uruchomienia sesji potrzebna jest jeszcze binarka 'comphwde' (projekt HWDE) w PATH - patrz README.
+    ::yellow ('hl make.hl check-comphwde' sprawdzi).
+done
+
+: uninstall def
+    -- log
+    ~> Uninstalling...
+    > rm -f $(DESTDIR)@PREFIX/bin/hacker-mode
+    > rm -f $(DESTDIR)@PREFIX/bin/hacker-mode-ipcctl
+    > rm -f $(DESTDIR)@PREFIX/bin/hacker-mode-session
+    > rm -f $(DESTDIR)/usr/share/wayland-sessions/hacker-mode.desktop
+    ::green Uninstalled
+done
+
+: clean def
+    -- log
+    ~> Cleaning...
+    > cargo clean
+    > rm -rf @FRONTEND/dist @FRONTEND/node_modules
+    ::green Clean done
+done
+
+;; === Dispatcher ===
+% target: str = help
+
+? @argc > 0
+    % target = @arg0
+done
+
+? switch @target
+| all
+    -- all
+| frontend
+    -- frontend
+| backend
+    -- backend
+| backend-dev
+    -- backend-dev
+| dev
+    -- dev
+| test
+    -- test
+| check
+    -- check
+| check-comphwde
+    -- check-comphwde
+| install
+    -- install
+| uninstall
+    -- uninstall
+| clean
+    -- clean
+| help
+    -- help
+| *
+    ::red Unknown target: @target
+    -- help
+    > exit 1
+done
