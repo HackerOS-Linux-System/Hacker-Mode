@@ -79,20 +79,27 @@ impl StoreProvider for EpicProvider {
         let parsed: Vec<LegendaryInstalledGame> = serde_json::from_str(&stdout)
             .map_err(|e| StoreError::ParseError("legendary list-installed".into(), e.to_string()))?;
 
+        let parsed: Vec<LegendaryInstalledGame> = parsed.into_iter().filter(|g| !g.is_dlc).collect();
+
+        // Podobnie jak w GOG (patrz `gog.rs::fetch_covers_in_parallel`):
+        // `find_cover_art` czyta lokalny plik metadanych `legendary`, ale
+        // samo pobranie okładki (`cover_cache::cache_image`) jest sieciowe,
+        // gdy nie ma jej jeszcze w cache Hacker Mode — więc przy sporej,
+        // świeżo dodanej bibliotece robimy to równolegle zamiast po kolei.
+        let app_names: Vec<String> = parsed.iter().map(|e| e.app_name.clone()).collect();
+        let covers = fetch_covers_in_parallel(&app_names);
+
         let games = parsed
             .into_iter()
-            .filter(|g| !g.is_dlc)
-            .map(|entry| {
-                let cover_path = find_cover_art(&entry.app_name);
-                Game {
-                    title: entry.title.clone().unwrap_or_else(|| entry.app_name.clone()),
-                    id: entry.app_name,
-                    platform: Platform::Epic,
-                    installed: true,
-                    install_dir: entry.install_path,
-                    cover_path,
-                    playtime_minutes: None,
-                }
+            .zip(covers)
+            .map(|(entry, cover_path)| Game {
+                title: entry.title.clone().unwrap_or_else(|| entry.app_name.clone()),
+                id: entry.app_name,
+                platform: Platform::Epic,
+                installed: true,
+                install_dir: entry.install_path,
+                cover_path,
+                playtime_minutes: None,
             })
             .collect();
 
@@ -118,18 +125,177 @@ impl StoreProvider for EpicProvider {
     }
 }
 
+/// Odpowiada polom, które nas interesują z `legendary list --json` (pełna
+/// biblioteka POSIADANYCH gier na koncie Epic — w przeciwieństwie do
+/// `legendary list-installed --json`, który widzi WYŁĄCZNIE gry już
+/// pobrane na tę maszynę). Legendary utrzymuje tę komendę od dawna jako
+/// odpowiednik przeglądania własnej biblioteki w kliencie Epic Games —
+/// wymaga tylko bycia zalogowanym (ten sam `legendary auth`, którego już
+/// używa `login_submit`), bez żadnego dodatkowego, nieudokumentowanego
+/// wywołania API.
+#[derive(Debug, Deserialize)]
+struct LegendaryCatalogGame {
+    app_name: String,
+    app_title: Option<String>,
+    #[serde(default)]
+    is_dlc: bool,
+}
+
+/// Pełna biblioteka POSIADANYCH (nie tylko zainstalowanych) gier Epic —
+/// używane przez `stores::list_all_games`, żeby dołożyć do biblioteki
+/// Hacker Mode gry, których użytkownik jeszcze nie zainstalował (patrz
+/// analogiczny mechanizm dla Steam: `steam::fetch_owned_games`). Ciche
+/// błędy (`Vec::new()`) — brak zalogowania/`legendary` niedostępne nie
+/// powinno nigdy zablokować reszty biblioteki, tylko pominąć tę jedną
+/// dodatkową funkcję.
+pub fn fetch_owned_games(_installed_ids: &std::collections::HashSet<String>) -> Vec<super::OwnedGame> {
+    let output = Command::new("legendary").args(["list", "--json"]).output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        tracing::debug!(
+            stderr = %String::from_utf8_lossy(&output.stderr),
+            "Epic: `legendary list --json` nie powiodło się (prawdopodobnie brak logowania)"
+        );
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Vec<LegendaryCatalogGame> = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::debug!(%err, "Epic: nie udało się sparsować `legendary list --json`");
+            return Vec::new();
+        }
+    };
+
+    parsed
+        .into_iter()
+        .filter(|g| !g.is_dlc)
+        .map(|g| {
+            // BUGFIX: referencja do `g.id` (pole, którego `LegendaryCatalogGame`
+            // w ogóle nie ma — jedyny identyfikator to `app_name`) —
+            // zgłoszone przez `cargo check` (E0609). Okładka szukana PRZED
+            // przeniesieniem `g.app_name` do `title` niżej, żeby uniknąć
+            // też błędu "use of moved value".
+            let cover_path = crate::cover_cache::build_client()
+                .and_then(|client| find_cover_art(&g.app_name, &client));
+            super::OwnedGame {
+                id: g.app_name.clone(),
+                title: g.app_title.unwrap_or(g.app_name),
+                // Ta sama okładka co dla zainstalowanych gier (lokalny cache
+                // metadanych `legendary`, patrz `find_cover_art`) — legendary
+                // zapisuje ten plik dla KAŻDEJ gry w bibliotece, którą kiedyś
+                // wylistował (`legendary list`), nie tylko dla zainstalowanych.
+                cover_path,
+            }
+        })
+        .collect()
+}
+
+/// Dociąga opis i zrzuty ekranu dla widoku szczegółów gry — BEZ żadnego
+/// dodatkowego zapytania sieciowego, bo `legendary` już zapisał pełne
+/// metadane katalogowe Epic (włącznie z `description` i `keyImages`) w
+/// TYM SAMYM pliku cache, którego `find_cover_art` (wyżej) używa do
+/// okładek — patrz jego moduł-dokumentacja. To dokładnie ten sam surowy
+/// JSON, jaki Epic Games Store zwraca ze swojego katalogu, tylko już
+/// pobrany i zapisany lokalnie przez `legendary`, więc nie musimy sami
+/// zgadywać/odtwarzać żadnego endpointu Epic.
+pub fn fetch_store_details(app_name: &str) -> Option<super::GameDetails> {
+    let metadata_path = dirs::config_dir()?
+        .join("legendary/metadata")
+        .join(format!("{app_name}.json"));
+    let content = std::fs::read_to_string(metadata_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let description = parsed
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // `keyImages` to tablica obiektów `{ "type": "...", "url": "..." }` —
+    // Epic oznacza zrzuty ekranu typami `"Screenshot"` (starszy katalog)
+    // albo `"OfferImageWide"`/`"OfferImageTall"` (nowszy, patrz przykłady
+    // publicznych dumpów katalogu Epic używanych przez społecznościowe
+    // narzędzia typu `epicgames-freegames-node`) — bierzemy WSZYSTKO
+    // zaczynające się od "Screenshot", a w ich braku nic (lepsze puste niż
+    // pokazanie np. loga sklepu jako "zrzutu ekranu").
+    let screenshots: Vec<String> = parsed
+        .get("keyImages")
+        .and_then(|v| v.as_array())
+        .map(|images| {
+            images
+                .iter()
+                .filter(|img| {
+                    img.get("type")
+                        .and_then(|t| t.as_str())
+                        .map(|t| t.starts_with("Screenshot"))
+                        .unwrap_or(false)
+                })
+                .filter_map(|img| img.get("url").and_then(|u| u.as_str()))
+                .map(String::from)
+                .take(6)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if description.is_empty() && screenshots.is_empty() {
+        return None;
+    }
+    Some(super::GameDetails { description, screenshots })
+}
+
 /// `legendary` cache'uje pełne metadane katalogowe (włącznie z URL-ami
 /// artworku) pod `~/.config/legendary/metadata/<app_name>.json` po każdym
 /// `legendary list`/`legendary info` — czytamy ten plik, jeśli istnieje,
 /// zamiast odpytywać API Epica bezpośrednio (które wymaga uwierzytelnienia
 /// niepublicznym tokenem). Jeśli plik nie istnieje (użytkownik nigdy nie
 /// odświeżył katalogu), po prostu brak okładki — nie jest to błąd krytyczny.
-fn find_cover_art(app_name: &str) -> Option<String> {
+fn find_cover_art(app_name: &str, client: &reqwest::blocking::Client) -> Option<String> {
     let metadata_path = dirs::config_dir()?
         .join("legendary/metadata")
         .join(format!("{app_name}.json"));
     let content = std::fs::read_to_string(metadata_path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
     let url = crate::cover_cache::find_image_url(&parsed)?;
-    crate::cover_cache::cache_image(&url, &format!("epic-{app_name}"))
+    crate::cover_cache::cache_image(&url, &format!("epic-{app_name}"), client)
+}
+
+/// Pobiera okładki dla wielu gier Epic naraz na ograniczonej puli wątków —
+/// patrz `gog.rs::fetch_covers_in_parallel` po pełny opis strategii
+/// (identyczna tu, tylko nad `app_name` zamiast ID produktu GOG). Wynik
+/// zachowuje kolejność wejściowego `app_names` dzięki rozłącznym,
+/// ciągłym fragmentom (`chunks`/`chunks_mut`) przydzielanym każdemu
+/// wątkowi, więc nie jest potrzebny `Mutex` ani sortowanie po fakcie.
+fn fetch_covers_in_parallel(app_names: &[String]) -> Vec<Option<String>> {
+    const MAX_PARALLEL_COVER_FETCHES: usize = 8;
+
+    let mut covers: Vec<Option<String>> = vec![None; app_names.len()];
+    if app_names.is_empty() {
+        return covers;
+    }
+
+    let Some(client) = crate::cover_cache::build_client() else {
+        return covers;
+    };
+
+    let worker_count = MAX_PARALLEL_COVER_FETCHES.min(app_names.len());
+    let chunk_size = (app_names.len() + worker_count - 1) / worker_count;
+
+    std::thread::scope(|scope| {
+        let name_chunks = app_names.chunks(chunk_size);
+        let cover_chunks = covers.chunks_mut(chunk_size);
+        for (names_chunk, covers_chunk) in name_chunks.zip(cover_chunks) {
+            let client = &client;
+            scope.spawn(move || {
+                for (name, slot) in names_chunk.iter().zip(covers_chunk.iter_mut()) {
+                    *slot = find_cover_art(name, client);
+                }
+            });
+        }
+    });
+
+    covers
 }
