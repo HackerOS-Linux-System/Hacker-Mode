@@ -18,8 +18,14 @@ tauri-build = { version = "2", features = [] }
 # Cargo.toml/moduł docs dla uzasadnienia); budowanie backendu nigdy nie
 # wymaga checkoutu ani kompilacji HWDE.
 hacker-mode-ipc = { path = "../../../ipc" }
+# `ea-cli`/`bnet`: detekcja i uruchamianie EA app / Battle.net pod Wine,
+# statycznie linkowane (zwykłe zależności Cargo, nie zewnętrzne binarki
+# wywoływane przez `Command` jak `legendary`/`gogdl`/`nile`) — patrz
+# `launchers-cli/ea-cli/src/lib.rs` i `launchers-cli/bnet/src/lib.rs`.
+ea-cli = { path = "../../../launchers-cli/ea-cli" }
+bnet = { path = "../../../launchers-cli/bnet" }
 
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -49,6 +55,13 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 [lib]
 name = "hacker_mode_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dev-dependencies]
+# Tylko do testów jednostkowych (`playtime.rs`, `steamgriddb.rs`) — pliki
+# tymczasowe zamiast dotykania prawdziwego `~/.local/share/hacker-mode/`
+# podczas `cargo test`. Ten sam wzorzec i ta sama wersja co w
+# `launchers-cli/ea-cli`/`launchers-cli/bnet` (patrz ich `Cargo.toml`).
+tempfile = "3"
 
 [[bin]]
 name = "hacker-mode"
