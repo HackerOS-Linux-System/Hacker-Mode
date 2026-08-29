@@ -1,19 +1,21 @@
 import { Component, createSignal, For, onCleanup, onMount } from "solid-js";
-import { api, type Platform } from "@/lib/tauri";
+import { api, PLATFORM_LABELS, type Platform } from "@/lib/tauri";
 import { gamesStore } from "@/stores/gamesStore";
 
-interface StoreDef {
-  id: Platform;
-  label: string;
-}
+/** Platformy, dla których Hacker Mode zarządza logowaniem z własnego UI —
+ * mają realną implementację `login_start`/`is_logged_in` po stronie Rust
+ * (patrz `Platform::supports_managed_login`). */
+const MANAGED_STORES: Platform[] = ["steam", "epic", "gog", "amazon"];
 
-const STORES: StoreDef[] = [
-  { id: "steam", label: "Steam" },
-  { id: "epic", label: "Epic Games" },
-  { id: "gog", label: "GOG" },
-  { id: "amazon", label: "Amazon Games" },
-  { id: "lutris", label: "Lutris" },
-];
+/** BUGFIX: Lutris/EA app/Battle.net logują się same, wewnątrz swojego
+ * okna — `is_logged_in`/`login_start` po stronie Rust dla nich to
+ * domyślna implementacja z trait `StoreProvider` (`is_logged_in` zawsze
+ * `true`, `login_start` zawsze błąd "logowanie nie jest obsługiwane").
+ * Wcześniej ten komponent traktował wszystkie platformy jednakowo —
+ * Lutris zawsze pokazywał fałszywy zielony badge "Zalogowano", a kliknięcie
+ * "Zaloguj" zawsze kończyło się czerwonym błędem. Rozdzielamy więc listę na
+ * dwie sekcje zamiast pokazywać złudny/zepsuty UI dla tych platform. */
+const SELF_MANAGED_STORES: Platform[] = ["lutris", "ea", "battlenet"];
 
 const StoreLogin: Component = () => {
   const [status, setStatus] = createSignal<Record<string, boolean>>({});
@@ -24,7 +26,7 @@ const StoreLogin: Component = () => {
 
   async function refreshStatus() {
     const entries = await Promise.all(
-      STORES.map(async (s) => [s.id, await api.storeIsLoggedIn(s.id)] as const),
+      MANAGED_STORES.map(async (id) => [id, await api.storeIsLoggedIn(id)] as const),
     );
     setStatus(Object.fromEntries(entries));
   }
@@ -77,23 +79,23 @@ const StoreLogin: Component = () => {
   return (
     <div class="settings-panel">
       <h3>Sklepy — logowanie</h3>
-      <For each={STORES}>
-        {(store) => (
+      <For each={MANAGED_STORES}>
+        {(id) => (
           <div class="settings-row">
             <span>
-              {store.label}{" "}
+              {PLATFORM_LABELS[id]}{" "}
               <span
                 class="badge"
                 style={{
-                  background: status()[store.id] ? "rgba(255,59,59,0.15)" : "rgba(255,91,91,0.12)",
-                  color: status()[store.id] ? "var(--accent)" : "var(--danger)",
+                  background: status()[id] ? "rgba(255,59,59,0.15)" : "rgba(255,91,91,0.12)",
+                  color: status()[id] ? "var(--accent)" : "var(--danger)",
                 }}
               >
-                {status()[store.id] ? "Zalogowano" : "Niezalogowano"}
+                {status()[id] ? "Zalogowano" : "Niezalogowano"}
               </span>
             </span>
-            <button class="ghost-btn" disabled={busy() === store.id} onClick={() => startLogin(store.id)}>
-              {busy() === store.id ? "…" : "Zaloguj"}
+            <button data-focusable tabIndex={0} class="ghost-btn" disabled={busy() === id} onClick={() => startLogin(id)}>
+              {busy() === id ? "…" : "Zaloguj"}
             </button>
           </div>
         )}
@@ -105,14 +107,14 @@ const StoreLogin: Component = () => {
             Jeśli okno logowania nie zamknęło się automatycznie, wklej tu skopiowany kod:
           </span>
           <div style={{ display: "flex", gap: "8px" }}>
-            <input
+            <input data-focusable tabIndex={0}
               type="text"
               value={codeInput()}
               onInput={(e) => setCodeInput(e.currentTarget.value)}
               placeholder="Kod autoryzacyjny"
               style={{ flex: "1", padding: "8px", "border-radius": "8px", border: "1px solid rgba(255,255,255,0.1)", background: "var(--bg)", color: "var(--text)" }}
             />
-            <button class="primary-btn" onClick={submitCode}>
+            <button data-focusable tabIndex={0} class="primary-btn" onClick={submitCode}>
               Wyślij
             </button>
           </div>
@@ -120,6 +122,20 @@ const StoreLogin: Component = () => {
       )}
 
       {message() && <div style={{ "font-size": "12px", color: "var(--text-muted)", "margin-top": "10px" }}>{message()}</div>}
+
+      <div style={{ "margin-top": "16px", "padding-top": "12px", "border-top": "1px solid rgba(255,255,255,0.08)" }}>
+        <span style={{ "font-size": "11px", color: "var(--text-muted)", display: "block", "margin-bottom": "8px" }}>
+          Te platformy logują się same, z poziomu własnego okna — Hacker Mode tylko je uruchamia:
+        </span>
+        <For each={SELF_MANAGED_STORES}>
+          {(id) => (
+            <div class="settings-row">
+              <span>{PLATFORM_LABELS[id]}</span>
+              <span style={{ "font-size": "11px", color: "var(--text-muted)" }}>zarządzane wewnętrznie</span>
+            </div>
+          )}
+        </For>
+      </div>
     </div>
   );
 };
