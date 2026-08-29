@@ -114,6 +114,8 @@ fn platform_slug(platform: Platform) -> &'static str {
         Platform::Gog => "gog",
         Platform::Amazon => "amazon",
         Platform::Lutris => "lutris",
+        Platform::Ea => "ea",
+        Platform::BattleNet => "battlenet",
     }
 }
 
