@@ -1,4 +1,4 @@
-use super::{tool_available, Game, LoginFlow, Platform, StoreError, StoreProvider};
+use super::{steam_shortcuts, tool_available, Game, LoginFlow, Platform, StoreError, StoreProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,8 +21,57 @@ impl SteamProvider {
         ]
     }
 
-    fn find_root() -> Option<PathBuf> {
+    pub(crate) fn find_root() -> Option<PathBuf> {
         Self::root_candidates().into_iter().find(|p| p.exists())
+    }
+
+    /// Automatyczne wykrycie SteamID64 z lokalnego pliku Steam
+    /// (`config/loginusers.vdf`) — zwykły tekstowy VDF (ten sam format co
+    /// `appmanifest_*.acf`, w przeciwieństwie do binarnego
+    /// `shortcuts.vdf`), w którym Steam trzyma listę kont, które
+    /// kiedykolwiek zalogowały się na tej maszynie. Klucze najwyższego
+    /// poziomu pod `"users"` to SAME SteamID64 (nie osobne pole) —
+    /// struktura wygląda tak:
+    /// ```text
+    /// "users"
+    /// {
+    ///     "76561198012345678"
+    ///     {
+    ///         "AccountName"  "..."
+    ///         "MostRecent"   "1"
+    ///     }
+    /// }
+    /// ```
+    /// Pozwala to Hacker Mode wypełnić `Settings::steam_id64` samodzielnie
+    /// (patrz `commands::list_games`) — użytkownik musi ręcznie podać już
+    /// tylko klucz Steam Web API (to prywatny sekret per-deweloper, nie da
+    /// się go w żaden sposób wyczytać lokalnie), zamiast dwóch osobnych
+    /// czynności (w tym szukania własnego SteamID64 przez zewnętrzne
+    /// narzędzia typu steamid.io).
+    ///
+    /// Jeśli zalogowanych było więcej kont, wybieramy to oznaczone
+    /// `"MostRecent" "1"` — a w braku takiego oznaczenia, po prostu
+    /// pierwsze znalezione (lepsze to niż nic).
+    pub fn find_local_steamid64() -> Option<String> {
+        let root = Self::find_root()?;
+        let content = std::fs::read_to_string(root.join("config/loginusers.vdf")).ok()?;
+        // `VdfValue::parse` spłaszcza nazwę bloku najwyższego poziomu (tu:
+        // "users") — `parsed` to już bezpośrednio mapa
+        // { "<steamid64>": { "AccountName": ..., "MostRecent": ... }, ... },
+        // BEZ dodatkowego zagnieżdżenia pod kluczem "users".
+        let parsed = VdfValue::parse(&content);
+        let users = parsed.as_map()?;
+
+        let most_recent = users.iter().find(|(_, v)| {
+            v.as_map()
+                .and_then(|m| m.get("MostRecent"))
+                .and_then(VdfValue::as_str)
+                == Some("1")
+        });
+
+        most_recent
+            .or_else(|| users.iter().next())
+            .map(|(steamid, _)| steamid.clone())
     }
 
     fn library_folders(root: &Path) -> Vec<PathBuf> {
@@ -41,7 +90,23 @@ impl SteamProvider {
                 }
             }
         }
+
+        // BUGFIX: `libraryfolders.vdf` zwyczajowo wymienia RÓWNIEŻ domyślną
+        // bibliotekę (`root/steamapps`), którą już dodaliśmy ręcznie wyżej
+        // — bez deduplikacji ten sam katalog jest skanowany dwa razy,
+        // efekt: każda gra/narzędzie z domyślnej biblioteki pojawia się w
+        // Hacker Mode PODWÓJNIE (dokładnie to widać na zrzucie ekranu:
+        // "Proton 10.0" duplikuje się). Kanonizujemy ścieżki (rozwiązuje
+        // to też przypadek, gdy dwie ścieżki wskazują to samo miejsce przez
+        // symlink) i odrzucamy powtórki, zachowując pierwsze wystąpienie.
+        let mut seen = std::collections::HashSet::new();
         libraries
+            .into_iter()
+            .filter(|lib| {
+                let canonical = std::fs::canonicalize(lib).unwrap_or_else(|_| lib.clone());
+                seen.insert(canonical)
+            })
+            .collect()
     }
 }
 
@@ -62,6 +127,30 @@ fn find_cover_art(root: &Path, appid: &str) -> Option<String> {
         .into_iter()
         .find(|p| p.exists())
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// BUGFIX: `appmanifest_*.acf` (skanowane w `list_games`) opisuje KAŻDĄ
+/// zainstalowaną "aplikację" Steam tym samym formatem — łącznie z własnymi
+/// narzędziami kompatybilności Valve (Proton, Steam Linux Runtime), które
+/// instalują się automatycznie przy pierwszym uruchomieniu jakiejkolwiek
+/// gry z Windows przez Proton. Prawdziwy klient Steam wie, że to nie gry,
+/// bo sprawdza pole `common.type` w swoim lokalnym binarnym cache
+/// `appinfo.vdf` (`"Tool"` zamiast `"Game"`) — ten plik ma udokumentowany,
+/// ale nietrywialny format binarny, którego nie parsujemy (żeby nie
+/// zgadywać jego układu bajtów bez pewnego źródła). Zamiast tego filtrujemy
+/// po NAZWIE: Valve od lat konsekwentnie nazywa te narzędzia tymi samymi,
+/// przewidywalnymi prefiksami (potwierdzone bezpośrednio na zrzucie ekranu
+/// zgłoszonym przez użytkownika: "Proton 10.0", "Proton Experimental",
+/// "Steam Linux Runtime 4.0", "Steam Linux Runtime 3.0 (sniper)") — dzięki
+/// dopasowaniu po prefiksie działa to też dla przyszłych wersji (np.
+/// "Proton 11.0"), bez potrzeby aktualizowania listy przy każdym wydaniu.
+fn is_valve_compat_tool(name: &str) -> bool {
+    const NON_GAME_PREFIXES: &[&str] = &[
+        "Proton",
+        "Steam Linux Runtime",
+        "Steamworks Common Redistributables",
+    ];
+    NON_GAME_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 impl StoreProvider for SteamProvider {
@@ -111,11 +200,19 @@ impl StoreProvider for SteamProvider {
             StoreError::ToolNotInstalled("katalog danych Steam (~/.steam/steam)".into())
         })?;
 
+        let libraries = Self::library_folders(&root);
+        tracing::debug!(root = %root.display(), libraries = ?libraries, "Steam: wykryte biblioteki");
+
         let mut games = Vec::new();
-        for lib in Self::library_folders(&root) {
-            let entries = match std::fs::read_dir(&lib) {
+        let mut manifests_seen = 0usize;
+        let mut filtered_as_tool = 0usize;
+        for lib in &libraries {
+            let entries = match std::fs::read_dir(lib) {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(err) => {
+                    tracing::debug!(dir = %lib.display(), error = %err, "Steam: nie udało się odczytać katalogu biblioteki");
+                    continue;
+                }
             };
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -127,6 +224,7 @@ impl StoreProvider for SteamProvider {
                 if !is_manifest {
                     continue;
                 }
+                manifests_seen += 1;
                 let Ok(content) = std::fs::read_to_string(&path) else {
                     continue;
                 };
@@ -142,6 +240,12 @@ impl StoreProvider for SteamProvider {
                     .and_then(VdfValue::as_str)
                     .unwrap_or("Nieznana gra")
                     .to_string();
+
+                if is_valve_compat_tool(&name) {
+                    filtered_as_tool += 1;
+                    continue;
+                }
+
                 let install_dir = map
                     .get("installdir")
                     .and_then(VdfValue::as_str)
@@ -158,11 +262,83 @@ impl StoreProvider for SteamProvider {
                 });
             }
         }
+
+        // Zabezpieczenie dodatkowe (poza deduplikacją folderów bibliotek w
+        // `library_folders`) — gdyby ten sam appid trafił się z innego
+        // powodu więcej niż raz (np. gra przeniesiona między dwiema
+        // bibliotekami bez usunięcia starego manifestu), zachowujemy
+        // pierwsze wystąpienie i odrzucamy resztę.
+        let mut seen_appids = std::collections::HashSet::new();
+        games.retain(|g| seen_appids.insert(g.id.clone()));
+
+        // Diagnostyka: gdyby ktoś zgłosił "0 gier mimo zainstalowanych
+        // gier w Steam", to jest pierwsze miejsce do sprawdzenia w logu —
+        // pokazuje dokładnie, ile plików appmanifest w ogóle znaleziono,
+        // ile odfiltrowano jako narzędzia Valve (Proton/Runtime) i ile
+        // finalnie zostało uznane za gry. Jeśli `manifests_seen` jest 0,
+        // problem jest w wykrywaniu bibliotek (`root`/`library_folders`,
+        // patrz log wyżej), nie w samym filtrze.
+        tracing::info!(
+            manifests_seen,
+            filtered_as_tool,
+            games_kept = games.len(),
+            "Steam: podsumowanie skanowania biblioteki (appmanifest)"
+        );
+
+        // Skróty "Add a Non-Steam Game to My Library" (np. Xenonauts.exe,
+        // Carrion.exe) — CAŁKOWICIE inny mechanizm niż appmanifest,
+        // wcześniej w ogóle nieobsługiwany przez Hacker Mode (stąd nie
+        // pojawiały się w bibliotece, mimo że są widoczne w prawdziwym
+        // kliencie Steam). Patrz moduł-dokumentacja `steam_shortcuts.rs`.
+        let shortcuts = steam_shortcuts::find_all_shortcuts(&root);
+        tracing::info!(shortcuts_found = shortcuts.len(), "Steam: podsumowanie skanowania shortcuts.vdf");
+        for shortcut in shortcuts {
+            games.push(Game {
+                // 64-bitowa forma `rungameid` zamiast surowego appidu ze
+                // skrótu — patrz `steam_shortcuts::rungameid_64` i jego
+                // moduł-dokumentacja (`launch_command` niżej buduje
+                // `steam://rungameid/<id>` z tego samego pola `id` dla
+                // WSZYSTKICH gier Steam, więc to musi być już właściwa,
+                // gotowa do użycia wartość).
+                id: steam_shortcuts::rungameid_64(shortcut.appid).to_string(),
+                title: shortcut.app_name,
+                platform: Platform::Steam,
+                // Plik wykonywalny już leży na dysku (dodany ręcznie przez
+                // użytkownika) — z perspektywy Hacker Mode to zawsze
+                // "zainstalowane", nie ma tu koncepcji instalacji/
+                // odinstalowania przez Steam.
+                installed: true,
+                install_dir: shortcut.exe,
+                // Steam trzyma niestandardowe okładki tych skrótów w
+                // `userdata/<id>/config/grid/`, ale w innym, niestandardowym
+                // formacie nazewnictwa niż `find_cover_art` niżej obsługuje
+                // dla zwykłych appidów — świadomie zostawione na potem
+                // zamiast zgadywane teraz.
+                cover_path: None,
+                playtime_minutes: None,
+            });
+        }
+
         Ok(games)
     }
 
     fn launch_command(&self, game_id: &str) -> Result<Command, StoreError> {
-        self.launch_command_with_action(game_id, "rungameid")
+        // BUGFIX (zgłoszone przez użytkownika): `steam://rungameid/<id>`
+        // działa niezawodnie TYLKO gdy klient Steam już jest uruchomiony —
+        // przy zimnym starcie (Steam jeszcze nie działa) to wywołanie
+        // często tylko odpala sam klient Steam i NIE doprowadza do
+        // uruchomienia konkretnej gry, więc użytkownik musiał ręcznie
+        // odpalić Steam osobno, zanim cokolwiek dało się uruchomić z
+        // Hacker Mode. `-applaunch <appid>` to udokumentowany, od dawna
+        // istniejący przełącznik wiersza poleceń Steam PRZEZNACZONY
+        // dokładnie do tego przypadku (uruchamianie gry z zewnętrznego
+        // launchera) — działa identycznie niezależnie od tego, czy Steam
+        // już działa (wtedy przekazuje żądanie przez IPC do działającej
+        // instancji) czy nie (wtedy sam odpala Steam i, po jego
+        // uruchomieniu, dołącza uruchomienie gry) — potwierdzone
+        // wieloma niezależnymi źródłami społeczności (m.in. deweloperzy
+        // narzędzi trzecich integrujących się ze Steam na Linuksie).
+        self.launch_command_with_action_applaunch(game_id)
     }
 }
 
@@ -272,8 +448,11 @@ pub fn search_store(query: &str) -> Vec<StoreSearchResult> {
 
 /// Minimalne url-encode dla zapytania (spacje/znaki specjalne) — bez
 /// dodawania zależności `urlencoding`, bo potrzebujemy tylko obsłużyć
-/// zwykły tekst wyszukiwania.
-fn urlencoding_minimal(input: &str) -> String {
+/// zwykły tekst wyszukiwania. `pub(crate)`, bo `steamgriddb.rs` (patrz
+/// wyszukiwanie po tytule dla EA/Battle.net) i `gog.rs` (`search_store`)
+/// współdzielą tę samą, bardzo prostą potrzebę zamiast każde utrzymywać
+/// własną kopię.
+pub(crate) fn urlencoding_minimal(input: &str) -> String {
     let mut out = String::new();
     for byte in input.as_bytes() {
         let c = *byte as char;
@@ -286,12 +465,39 @@ fn urlencoding_minimal(input: &str) -> String {
     out
 }
 
-pub fn fetch_owned_games_playtime(api_key: &str, steam_id64: &str) -> HashMap<String, u64> {
+#[derive(Debug, Clone)]
+pub struct OwnedSteamGame {
+    pub appid: String,
+    pub name: String,
+    pub playtime_minutes: u64,
+}
+
+/// Pełna lista gier **posiadanych** na koncie Steam (nie tylko
+/// zainstalowanych) przez oficjalne `IPlayerService/GetOwnedGames`.
+///
+/// BUGFIX: `SteamProvider::list_games` (skan lokalnych
+/// `appmanifest_*.acf`) z natury rzeczy widzi WYŁĄCZNIE gry już
+/// zainstalowane na tej maszynie — Steam nie trzyma nigdzie lokalnie
+/// pełnej listy posiadanych gier. Dlatego biblioteka Steam w Hacker Mode
+/// pokazywała tylko zainstalowane tytuły, mimo że użytkownik mógł mieć
+/// dziesiątki innych gier na koncie. Ta funkcja (wywoływana z
+/// `commands::stores::list_all_games`, gdy w ustawieniach jest klucz API +
+/// SteamID64 — dokładnie te same dane co przy dociąganiu czasu gry) daje
+/// pełną listę, którą `list_all_games` scala z wynikiem lokalnego skanu:
+/// gry już obecne (zainstalowane) zostają jak są (z lokalną okładką z
+/// cache Steam), a te tylko *posiadane* dochodzą jako `installed: false`
+/// (patrz `Game` w tej samej funkcji wywołującej), więc dają się
+/// zainstalować wprost z Hacker Mode.
+///
+/// `include_appinfo=true` (w przeciwieństwie do wcześniejszej wersji tej
+/// funkcji, wywoływanej tylko po czas gry) — potrzebujemy teraz też nazwy
+/// gry, żeby dało się ją wyświetlić bez lokalnych metadanych.
+pub fn fetch_owned_games(api_key: &str, steam_id64: &str) -> Vec<OwnedSteamGame> {
     let url = format!(
-        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={api_key}&steamid={steam_id64}&format=json&include_appinfo=false&include_played_free_games=true"
+        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={api_key}&steamid={steam_id64}&format=json&include_appinfo=true&include_played_free_games=true"
     );
 
-    let result: Option<HashMap<String, u64>> = (|| {
+    let result: Option<Vec<OwnedSteamGame>> = (|| {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(8))
             .build()
@@ -303,16 +509,274 @@ pub fn fetch_owned_games_playtime(api_key: &str, steam_id64: &str) -> HashMap<St
         }
         let parsed: serde_json::Value = response.json().ok()?;
         let games = parsed.get("response")?.get("games")?.as_array()?;
-        let mut map = HashMap::new();
+        let mut out = Vec::new();
         for game in games {
-            let appid = game.get("appid")?.as_u64()?;
+            let Some(appid) = game.get("appid").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let name = game
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Nieznana gra")
+                .to_string();
             let minutes = game.get("playtime_forever").and_then(|v| v.as_u64()).unwrap_or(0);
-            map.insert(appid.to_string(), minutes);
+            out.push(OwnedSteamGame { appid: appid.to_string(), name, playtime_minutes: minutes });
         }
-        Some(map)
+        Some(out)
     })();
 
     result.unwrap_or_default()
+}
+
+/// Pojedyncze osiągnięcie, już scalone z danymi z `GetSchemaForGame`
+/// (nazwa/opis/ikona — `GetPlayerAchievements` sam ma tylko techniczną
+/// `apiname`, patrz `fetch_achievements`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Achievement {
+    pub api_name: String,
+    pub display_name: String,
+    pub description: String,
+    pub achieved: bool,
+    /// Sekundy od epoki Unix, `0` jeśli nieodblokowane — dokładnie tak,
+    /// jak zwraca to samo Steam Web API (`unlocktime`), bez konwersji na
+    /// coś czytelniejszego tutaj; formatowanie daty to sprawa frontendu.
+    pub unlock_time: u64,
+    pub icon_url: String,
+}
+
+/// Osiągnięcia gracza dla danej gry Steam — łączy DWA wywołania Steam Web
+/// API, bo żadne pojedyncze nie ma wszystkiego, czego potrzebuje widok
+/// szczegółów gry (`GameDetail.tsx`):
+/// - `ISteamUserStats/GetPlayerAchievements` — czy dane osiągnięcie jest
+///   odblokowane i kiedy, ale identyfikuje je tylko techniczną `apiname`
+///   (np. `"ACH_WIN_ONE_GAME"`), bez nazwy/opisu/ikony do pokazania.
+/// - `ISteamUserStats/GetSchemaForGame` — pełny SCHEMAT gry: dla każdej
+///   `apiname` ma `displayName`/`description`/`icon` (odblokowana)/
+///   `icongray` (zablokowana), ale nic o TYM konkretnym graczu.
+///
+/// Wymaga tych samych dwóch ustawień co czas gry Steam
+/// (`Settings::steam_api_key`/`steam_id64`) — jeśli profil gracza nie jest
+/// publiczny, `GetPlayerAchievements` zwróci błąd (Steam Web API to
+/// sygnalizuje polem `"success": false` w odpowiedzi, nie kodem HTTP),
+/// więc sprawdzamy oba.
+pub fn fetch_achievements(api_key: &str, steam_id64: &str, appid: &str) -> Vec<Achievement> {
+    let Some(client) = crate::cover_cache::build_client() else {
+        return Vec::new();
+    };
+
+    let Some(schema) = fetch_achievement_schema(appid, api_key, &client) else {
+        // Brak schematu = albo gra nie ma osiągnięć w ogóle, albo błąd
+        // API — w obu przypadkach nie mamy jak pokazać czegokolwiek
+        // sensownego (same `apiname` bez nazw byłyby bezużyteczne w UI).
+        return Vec::new();
+    };
+    let unlocked = fetch_player_unlocks(appid, api_key, steam_id64, &client).unwrap_or_default();
+
+    schema
+        .into_iter()
+        .map(|entry| {
+            let progress = unlocked.get(&entry.api_name);
+            Achievement {
+                api_name: entry.api_name,
+                display_name: entry.display_name,
+                description: entry.description,
+                achieved: progress.map(|p| p.achieved).unwrap_or(false),
+                unlock_time: progress.map(|p| p.unlock_time).unwrap_or(0),
+                icon_url: if progress.map(|p| p.achieved).unwrap_or(false) {
+                    entry.icon_unlocked
+                } else {
+                    entry.icon_locked
+                },
+            }
+        })
+        .collect()
+}
+
+struct SchemaEntry {
+    api_name: String,
+    display_name: String,
+    description: String,
+    icon_unlocked: String,
+    icon_locked: String,
+}
+
+fn fetch_achievement_schema(appid: &str, api_key: &str, client: &reqwest::blocking::Client) -> Option<Vec<SchemaEntry>> {
+    let url = format!(
+        "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key={api_key}&appid={appid}"
+    );
+    let response = client.get(&url).send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().ok()?;
+    parse_achievement_schema(&body)
+}
+
+/// Rdzeń `fetch_achievement_schema` — wydzielone parsowanie, testowalne
+/// na przykładowym JSON-ie bez wykonywania zapytania HTTP (patrz `mod
+/// tests`), ten sam wzorzec co `gog::parse_store_details`/`parse_owned_ids`.
+fn parse_achievement_schema(body: &str) -> Option<Vec<SchemaEntry>> {
+    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
+    let entries = parsed
+        .get("game")?
+        .get("availableGameStats")?
+        .get("achievements")?
+        .as_array()?;
+
+    let out = entries
+        .iter()
+        .filter_map(|e| {
+            Some(SchemaEntry {
+                api_name: e.get("name")?.as_str()?.to_string(),
+                display_name: e.get("displayName").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                description: e.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                icon_unlocked: e.get("icon").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                icon_locked: e.get("icongray").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            })
+        })
+        .collect();
+    Some(out)
+}
+
+struct PlayerProgress {
+    achieved: bool,
+    unlock_time: u64,
+}
+
+fn fetch_player_unlocks(
+    appid: &str,
+    api_key: &str,
+    steam_id64: &str,
+    client: &reqwest::blocking::Client,
+) -> Option<std::collections::HashMap<String, PlayerProgress>> {
+    let url = format!(
+        "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key={api_key}&steamid={steam_id64}&appid={appid}"
+    );
+    let response = client.get(&url).send().ok()?;
+    // Steam Web API zgłasza "profil prywatny"/"gra bez osiągnięć" przez
+    // `"success": false` w TREŚCI odpowiedzi (HTTP 200), a nie kodem
+    // statusu — stąd sprawdzamy oba, żeby nie przeoczyć tego drugiego
+    // przypadku i nie zwrócić po cichu pustej mapy tam, gdzie w ogóle nie
+    // dało się odczytać danych gracza.
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().ok()?;
+    parse_player_unlocks(appid, &body)
+}
+
+/// Rdzeń `fetch_player_unlocks` — patrz `parse_achievement_schema` po
+/// wyjaśnienie, dlaczego parsowanie jest osobną, testowalną funkcją.
+/// `appid` tu jest potrzebny WYŁĄCZNIE do logu debug przy `success: false`
+/// — sam parsing go nie używa.
+fn parse_player_unlocks(appid: &str, body: &str) -> Option<std::collections::HashMap<String, PlayerProgress>> {
+    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
+    let stats = parsed.get("playerstats")?;
+    if stats.get("success").and_then(|v| v.as_bool()) != Some(true) {
+        tracing::debug!(appid, "Steam: GetPlayerAchievements success=false (profil prywatny lub gra bez osiągnięć)");
+        return None;
+    }
+    let achievements = stats.get("achievements")?.as_array()?;
+
+    let mut out = std::collections::HashMap::new();
+    for a in achievements {
+        let Some(api_name) = a.get("apiname").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let achieved = a.get("achieved").and_then(|v| v.as_u64()).unwrap_or(0) == 1;
+        let unlock_time = a.get("unlocktime").and_then(|v| v.as_u64()).unwrap_or(0);
+        out.insert(api_name.to_string(), PlayerProgress { achieved, unlock_time });
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod achievement_tests {
+    use super::*;
+
+    const SAMPLE_SCHEMA: &str = r#"{
+        "game": {
+            "gameName": "Half-Life 2",
+            "availableGameStats": {
+                "achievements": [
+                    { "name": "ACH_WIN_ONE_GAME", "displayName": "Wygraj grę", "description": "Wygraj jedną grę", "icon": "https://example.com/unlocked.jpg", "icongray": "https://example.com/locked.jpg" },
+                    { "name": "ACH_NO_DESC", "displayName": "Bez opisu" }
+                ]
+            }
+        }
+    }"#;
+
+    #[test]
+    fn parses_achievement_schema() {
+        let entries = parse_achievement_schema(SAMPLE_SCHEMA).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].api_name, "ACH_WIN_ONE_GAME");
+        assert_eq!(entries[0].display_name, "Wygraj grę");
+        assert_eq!(entries[0].icon_unlocked, "https://example.com/unlocked.jpg");
+        // Brakujące pola opcjonalne (`description` tu) mają zostać pustym
+        // stringiem, nie wywalić parsowania całego wpisu.
+        assert_eq!(entries[1].description, "");
+    }
+
+    #[test]
+    fn parse_achievement_schema_missing_achievements_field_returns_none() {
+        assert!(parse_achievement_schema(r#"{"game": {"gameName": "X"}}"#).is_none());
+    }
+
+    #[test]
+    fn parse_achievement_schema_garbage_returns_none() {
+        assert!(parse_achievement_schema("nie json").is_none());
+    }
+
+    const SAMPLE_PLAYER_ACHIEVEMENTS: &str = r#"{
+        "playerstats": {
+            "steamID": "12345",
+            "gameName": "Half-Life 2",
+            "achievements": [
+                { "apiname": "ACH_WIN_ONE_GAME", "achieved": 1, "unlocktime": 1700000000 },
+                { "apiname": "ACH_NOT_YET", "achieved": 0, "unlocktime": 0 }
+            ],
+            "success": true
+        }
+    }"#;
+
+    const SAMPLE_PLAYER_ACHIEVEMENTS_PRIVATE: &str = r#"{
+        "playerstats": {
+            "success": false,
+            "error": "Profile is not public"
+        }
+    }"#;
+
+    #[test]
+    fn parses_player_unlocks() {
+        let unlocks = parse_player_unlocks("440", SAMPLE_PLAYER_ACHIEVEMENTS).unwrap();
+        assert_eq!(unlocks.len(), 2);
+        assert!(unlocks["ACH_WIN_ONE_GAME"].achieved);
+        assert_eq!(unlocks["ACH_WIN_ONE_GAME"].unlock_time, 1700000000);
+        assert!(!unlocks["ACH_NOT_YET"].achieved);
+    }
+
+    #[test]
+    fn parse_player_unlocks_private_profile_returns_none() {
+        assert!(parse_player_unlocks("440", SAMPLE_PLAYER_ACHIEVEMENTS_PRIVATE).is_none());
+    }
+
+    #[test]
+    fn parse_player_unlocks_garbage_returns_none() {
+        assert!(parse_player_unlocks("440", "nie json").is_none());
+    }
+}
+
+/// Publiczny, znany od lat adres CDN Steam dla okładek biblioteki
+/// (`library_600x900`) — dokładnie ten sam wzorzec, którego bez
+/// uwierzytelniania używają np. SteamDB i inne narzędzia community. Nie
+/// wymaga pobierania/cache'owania lokalnie (w przeciwieństwie do
+/// `cover_cache` dla Epic/GOG/Amazon) — działa jako bezpośredni URL w
+/// `<img src>`, więc używany tylko dla gier POSIADANYCH, ale
+/// NIEZAINSTALOWANYCH (te zainstalowane mają już lepszą, lokalnie
+/// pobraną okładkę z `find_cover_art`, patrz `list_games`).
+pub fn owned_game_cdn_cover_url(appid: &str) -> String {
+    format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/library_600x900.jpg")
 }
 
 impl SteamProvider {
@@ -331,6 +795,25 @@ impl SteamProvider {
                 "com.valvesoftware.Steam",
                 &format!("steam://{action}/{game_id}"),
             ]);
+            Ok(cmd)
+        } else {
+            Err(StoreError::ToolNotInstalled("steam".into()))
+        }
+    }
+
+    /// Patrz `launch_command` po pełne uzasadnienie, dlaczego to NIE jest
+    /// zwykłe `launch_command_with_action(id, "rungameid")` — `-applaunch`
+    /// to osobny przełącznik wiersza poleceń (nie URI `steam://`), więc
+    /// wymaga osobnej budowy argumentów zamiast współdzielenia
+    /// `launch_command_with_action`.
+    fn launch_command_with_action_applaunch(&self, game_id: &str) -> Result<Command, StoreError> {
+        if tool_available("steam") {
+            let mut cmd = Command::new("steam");
+            cmd.args(["-applaunch", game_id]);
+            Ok(cmd)
+        } else if tool_available("flatpak") {
+            let mut cmd = Command::new("flatpak");
+            cmd.args(["run", "com.valvesoftware.Steam", "-applaunch", game_id]);
             Ok(cmd)
         } else {
             Err(StoreError::ToolNotInstalled("steam".into()))
@@ -477,6 +960,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn finds_most_recent_steamid64_from_loginusers_vdf() {
+        let sample = r#"
+"users"
+{
+    "76561197960287930"
+    {
+        "AccountName"       "oldaccount"
+        "PersonaName"       "Old"
+        "RememberPassword"  "1"
+        "MostRecent"        "0"
+    }
+    "76561198012345678"
+    {
+        "AccountName"       "mainaccount"
+        "PersonaName"       "Main"
+        "RememberPassword"  "1"
+        "MostRecent"        "1"
+    }
+}
+"#;
+        let parsed = VdfValue::parse(sample);
+        let users = parsed.as_map().expect("root powinien być mapą");
+        assert_eq!(users.len(), 2, "obie konta powinny się sparsować");
+
+        let most_recent = users
+            .iter()
+            .find(|(_, v)| {
+                v.as_map()
+                    .and_then(|m| m.get("MostRecent"))
+                    .and_then(VdfValue::as_str)
+                    == Some("1")
+            })
+            .map(|(steamid, _)| steamid.clone());
+
+        assert_eq!(most_recent.as_deref(), Some("76561198012345678"));
+    }
+
+    #[test]
     fn parses_simple_acf() {
         let sample = r#"
         "AppState"
@@ -493,6 +1014,17 @@ mod tests {
             map.get("name").unwrap().as_str().unwrap(),
             "Team Fortress 2"
         );
+    }
+
+    #[test]
+    fn filters_out_valve_compat_tools_by_name() {
+        assert!(is_valve_compat_tool("Proton 10.0"));
+        assert!(is_valve_compat_tool("Proton Experimental"));
+        assert!(is_valve_compat_tool("Steam Linux Runtime 4.0"));
+        assert!(is_valve_compat_tool("Steam Linux Runtime 3.0 (sniper)"));
+        assert!(is_valve_compat_tool("Steamworks Common Redistributables"));
+        assert!(!is_valve_compat_tool("Dying Light"));
+        assert!(!is_valve_compat_tool("No Man's Sky"));
     }
 
     #[test]
