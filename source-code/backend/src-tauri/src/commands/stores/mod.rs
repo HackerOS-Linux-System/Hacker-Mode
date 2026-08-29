@@ -1,8 +1,14 @@
 pub mod amazon;
+pub mod battlenet;
+pub mod ea;
 pub mod epic;
 pub mod gog;
 pub mod lutris;
 pub mod steam;
+// Prywatny (nie `pub`) — szczegół implementacyjny wyłącznie `steam.rs`
+// (odczyt `userdata/<id>/config/shortcuts.vdf`, skróty non-Steam typu
+// "Add a Non-Steam Game to My Library"). Patrz jego moduł-dokumentacja.
+mod steam_shortcuts;
 
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -15,6 +21,8 @@ pub enum Platform {
     Gog,
     Amazon,
     Lutris,
+    Ea,
+    BattleNet,
 }
 
 impl Platform {
@@ -25,7 +33,40 @@ impl Platform {
             Platform::Gog => "GOG",
             Platform::Amazon => "Amazon Games",
             Platform::Lutris => "Lutris",
+            Platform::Ea => "EA app",
+            Platform::BattleNet => "Battle.net",
         }
+    }
+
+    /// Krótki identyfikator tekstowy platformy, dokładnie taki, jaki
+    /// serde produkuje dla tego wariantu dzięki `#[serde(rename_all =
+    /// "lowercase")]` na `Platform` — używany do porównań z
+    /// `Settings::enabled_platforms` (lista stringów zapisywana przez
+    /// frontend, patrz `Settings.tsx`/`settingsStore.ts`), bez potrzeby
+    /// przechodzenia przez pełną (de)serializację JSON dla tak prostego
+    /// porównania.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            Platform::Steam => "steam",
+            Platform::Epic => "epic",
+            Platform::Gog => "gog",
+            Platform::Amazon => "amazon",
+            Platform::Lutris => "lutris",
+            Platform::Ea => "ea",
+            Platform::BattleNet => "battlenet",
+        }
+    }
+
+    /// Czy Hacker Mode potrafi zarządzać logowaniem do tej platformy z
+    /// poziomu własnego UI (`StoreLogin.tsx`) — `true` dla Steam/Epic/GOG/
+    /// Amazon (patrz `login_start`/`is_logged_in` nadpisane przez ich
+    /// providerów). Lutris/EA app/Battle.net zarządzają logowaniem same,
+    /// wewnątrz swojego okna — nie ma tu nic do "zalogowania" z perspektywy
+    /// Hacker Mode, więc `StoreLogin.tsx` nie powinien pokazywać dla nich
+    /// przycisku "Zaloguj"/statusu logowania (dawniej pokazywał, mylnie —
+    /// patrz historia zmian).
+    pub fn supports_managed_login(&self) -> bool {
+        matches!(self, Platform::Steam | Platform::Epic | Platform::Gog | Platform::Amazon)
     }
 }
 
@@ -47,6 +88,29 @@ pub struct Game {
 pub struct GameDetails {
     pub description: String,
     pub screenshots: Vec<String>,
+}
+
+/// Wspólny kształt "gra posiadana na koncie" dla platform, których
+/// providerzy potrafią wylistować PEŁNĄ bibliotekę (nie tylko to, co
+/// zainstalowane lokalnie) — dziś Epic (`epic::fetch_owned_games`) i
+/// Amazon (`amazon::fetch_owned_games`), analogicznie do
+/// `steam::OwnedSteamGame`, którego Steam używa od dłuższego czasu.
+/// Celowo bez `platform`/`installed`/`playtime_minutes` — te pola
+/// dokłada dopiero `merge_owned_but_not_installed` w `list_all_games`,
+/// bo są takie same dla każdego wpisu z danej platformy.
+///
+/// BUGFIX: ta struktura przez kilka poprzednich tur w ogóle nie miała
+/// `#[derive(...)]` — działało to tylko dlatego, że `OwnedGame` nigdzie
+/// nie przekraczało granicy wymagającej `Serialize`/`Clone`/`Debug` (jest
+/// tworzone i od razu konsumowane wewnątrz `merge_owned_but_not_installed`).
+/// `Serialize`/`Deserialize` potrzebne teraz do cache'owania
+/// `gog::fetch_owned_games` w `net_cache` (patrz `gog.rs`) — bez tego
+/// derive'a ten cache w ogóle by się nie skompilował.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnedGame {
+    pub id: String,
+    pub title: String,
+    pub cover_path: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, Serialize)]
@@ -138,25 +202,55 @@ pub trait StoreProvider {
     fn launch_command(&self, game_id: &str) -> Result<Command, StoreError>;
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformWarning {
+    pub platform: Platform,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryLoadResult {
+    pub games: Vec<Game>,
+    /// BUGFIX: dawniej błąd pojedynczego providera (np. `legendary`
+    /// zwracające błąd przez zepsutą/wygasłą sesję) trafiał WYŁĄCZNIE do
+    /// `tracing::warn!` w pliku logu — użytkownik widział po prostu pustą
+    /// bibliotekę danego sklepu bez żadnej wskazówki dlaczego. Komenda
+    /// `list_games` zwracała `Vec<Game>` zamiast `Result`/struktury z
+    /// błędami, więc frontendowe `gamesStore.error` nie miało jak się
+    /// kiedykolwiek ustawić. Teraz agregacja zwraca też listę ostrzeżeń —
+    /// patrz `Library.tsx`, które je wyświetla.
+    pub warnings: Vec<PlatformWarning>,
+}
+
 /// Agreguje biblioteki ze wszystkich dostępnych platform. Błąd pojedynczego
-/// dostawcy nie przerywa całości — jest logowany i pomijany, tak by np.
-/// brak konta Amazon Games nie blokował widoku biblioteki Steam.
+/// dostawcy nie przerywa całości — jest logowany, pomijany przy budowaniu
+/// listy gier, ALE zwracany też w `warnings`, tak by np. zepsuta sesja
+/// Epic nie blokowała widoku biblioteki Steam, a jednocześnie użytkownik
+/// widział w UI, że coś jest nie tak z Epikiem, zamiast domyślać się tego
+/// z pustej zakładki.
 ///
-/// Uwaga wydajnościowa: pobieranie okładek dla Epic/GOG (patrz
-/// `epic.rs`/`gog.rs`) jest synchroniczne i sieciowe — przy dużej bibliotece
-/// bez lokalnego cache (pierwsze uruchomienie) `list_games` może zauważalnie
-/// zwolnić. Do rozważenia w przyszłości: równoległe pobieranie (np. przez
-/// `rayon` albo pulę wątków) zamiast pobierania okładka-po-okładce.
-pub fn list_all_games(steam_credentials: Option<(&str, &str)>) -> Vec<Game> {
+/// Uwaga wydajnościowa: pobieranie okładek dla Epic/GOG jest sieciowe —
+/// przy dużej bibliotece bez lokalnego cache (pierwsze uruchomienie) samo
+/// odpytywanie API okładka-po-okładce potrafiłoby zauważalnie zwolnić
+/// `list_games`. Dlatego `epic::EpicProvider::list_games` i
+/// `gog::GogProvider::list_games` pobierają swoje okładki równolegle, na
+/// ograniczonej puli wątków (`fetch_covers_in_parallel` w każdym z tych
+/// modułów, `std::thread::scope`, limit 8 wątków naraz, jeden współdzielony
+/// `reqwest::blocking::Client` — patrz `cover_cache::build_client`) zamiast
+/// pobierać jedna-po-drugiej.
+pub fn list_all_games(steam_credentials: Option<(&str, &str)>) -> LibraryLoadResult {
     let providers: Vec<Box<dyn StoreProvider>> = vec![
         Box::new(steam::SteamProvider::default()),
         Box::new(epic::EpicProvider::default()),
         Box::new(gog::GogProvider::default()),
         Box::new(amazon::AmazonProvider::default()),
         Box::new(lutris::LutrisProvider::default()),
+        Box::new(ea::EaProvider::default()),
+        Box::new(battlenet::BattleNetProvider::default()),
     ];
 
     let mut all_games = Vec::new();
+    let mut warnings = Vec::new();
     for provider in providers {
         if !provider.is_available() {
             tracing::debug!(platform = ?provider.platform(), "Sklep niedostępny (brak narzędzia), pomijam");
@@ -169,22 +263,153 @@ pub fn list_all_games(steam_credentials: Option<(&str, &str)>) -> Vec<Game> {
             }
             Err(err) => {
                 tracing::warn!(platform = ?provider.platform(), error = %err, "Nie udało się wczytać biblioteki");
+                warnings.push(PlatformWarning {
+                    platform: provider.platform(),
+                    message: err.to_string(),
+                });
             }
         }
     }
 
     if let Some((api_key, steam_id64)) = steam_credentials {
-        let playtimes = steam::fetch_owned_games_playtime(api_key, steam_id64);
-        if !playtimes.is_empty() {
-            for game in all_games.iter_mut().filter(|g| g.platform == Platform::Steam) {
-                if let Some(minutes) = playtimes.get(&game.id) {
-                    game.playtime_minutes = Some(*minutes);
+        // BUGFIX: dawniej ta gałąź dociągała WYŁĄCZNIE czas gry dla już
+        // znalezionych (czyli tylko zainstalowanych) gier Steam. Teraz
+        // ten sam jeden request (`fetch_owned_games`) robi dwie rzeczy:
+        // wzbogaca zainstalowane gry o realny czas gry, i dokłada do
+        // biblioteki gry POSIADANE, ale niezainstalowane na tej maszynie
+        // (`installed: false`, z okładką z publicznego CDN Steam zamiast
+        // lokalnego cache — patrz `steam::owned_game_cdn_cover_url`).
+        // Wcześniej takie gry w ogóle się nie pojawiały w Hacker Mode.
+        let owned = steam::fetch_owned_games(api_key, steam_id64);
+        if !owned.is_empty() {
+            // Uwaga o pożyczaniu: `installed_appids` musi trzymać
+            // WŁASNE `String`, nie `&str` pożyczone z `all_games` — ten
+            // sam blok dalej robi `all_games.iter_mut()`/`all_games.push()`
+            // (pożyczenie mutowalne), więc jakiekolwiek pożyczenie
+            // niemutowalne z `all_games` żyjące przez całą pętlę
+            // (`HashSet<&str>` by tak robił) nie przeszłoby przez
+            // borrow checker.
+            let installed_appids: std::collections::HashSet<String> = all_games
+                .iter()
+                .filter(|g| g.platform == Platform::Steam)
+                .map(|g| g.id.clone())
+                .collect();
+
+            for owned_game in &owned {
+                if installed_appids.contains(&owned_game.appid) {
+                    // Już mamy tę grę z lokalnego skanu — tylko
+                    // uzupełniamy realny czas gry, resztę (okładkę z
+                    // lokalnego cache, install_dir) zostawiamy bez zmian.
+                    if let Some(game) = all_games
+                        .iter_mut()
+                        .find(|g| g.platform == Platform::Steam && g.id == owned_game.appid)
+                    {
+                        game.playtime_minutes = Some(owned_game.playtime_minutes);
+                    }
+                } else {
+                    all_games.push(Game {
+                        id: owned_game.appid.clone(),
+                        title: owned_game.name.clone(),
+                        platform: Platform::Steam,
+                        installed: false,
+                        install_dir: None,
+                        cover_path: Some(steam::owned_game_cdn_cover_url(&owned_game.appid)),
+                        playtime_minutes: Some(owned_game.playtime_minutes),
+                    });
                 }
             }
         }
     }
 
-    all_games
+    // Ostrzeżenie widoczne w UI (patrz `Library.tsx`, ten sam mechanizm co
+    // `warnings` wyżej), gdy Lutris JEST dostępny, ale `sqlite3` nie —
+    // wtedy `lutris::LutrisProvider::uninstall_command` i czas gry w
+    // `list_games` (patrz `lutris::fetch_playtime_minutes`) po cichu nic
+    // nie robią, bo obie funkcje wymagają tego narzędzia (patrz
+    // moduł-dokumentacja `lutris.rs`). Bez tego ostrzeżenia użytkownik nie
+    // miałby żadnego sposobu, żeby się dowiedzieć, DLACZEGO przycisk
+    // „Odinstaluj” przy grze z Lutrisa nic nie zrobił — w logu było to
+    // widoczne od razu (`tracing::debug!`/`Err(StoreError::ToolNotInstalled)`),
+    // ale nikt poza deweloperem nie zagląda do logów Hacker Mode.
+    if lutris::LutrisProvider::default().is_available() && !tool_available("sqlite3") {
+        warnings.push(PlatformWarning {
+            platform: Platform::Lutris,
+            message: "Brakuje narzędzia „sqlite3” w systemie — deinstalacja gier Lutrisa i ich realny czas gry (z bazy Lutrisa) nie działają. Reszta Lutrisa (uruchamianie, instalacja) działa normalnie.".to_string(),
+        });
+    }
+
+    // Epic/Amazon/GOG: ten sam pomysł co dla Steam wyżej (gry POSIADANE,
+    // ale niezainstalowane), tylko bez osobnych danych logowania —
+    // providerzy te już wiedzą, czy są zalogowani (`is_logged_in`, oparte
+    // o pliki konfiguracyjne `legendary`/`nile`/`gogdl`, patrz ich
+    // moduły), więc warunkiem jest tylko dostępność narzędzia +
+    // zalogowanie, tak jak przy `list_games` wyżej w tej samej funkcji.
+    merge_owned_but_not_installed(&mut all_games, Platform::Epic, epic::EpicProvider::default().is_available() && epic::EpicProvider::default().is_logged_in(), epic::fetch_owned_games);
+    merge_owned_but_not_installed(&mut all_games, Platform::Amazon, amazon::AmazonProvider::default().is_available() && amazon::AmazonProvider::default().is_logged_in(), amazon::fetch_owned_games);
+    merge_owned_but_not_installed(&mut all_games, Platform::Gog, gog::GogProvider::default().is_available() && gog::GogProvider::default().is_logged_in(), gog::fetch_owned_games);
+
+    LibraryLoadResult { games: all_games, warnings }
+}
+
+/// Dokłada do `all_games` gry z `fetch_owned` (pełna biblioteka
+/// POSIADANA na koncie danej platformy), które nie są jeszcze na liście —
+/// czyli te, których lokalny skan (`list_games`) nie znalazł, bo nie są
+/// zainstalowane na tej maszynie. Gry już obecne na liście (bo są
+/// zainstalowane) zostają BEZ ZMIAN — w przeciwieństwie do bloku Steam
+/// wyżej, tu nie ma dodatkowego "prawdziwego" czasu gry do dociągnięcia
+/// przy okazji (to już robi `epic::fetch_owned_games`/`amazon::fetch_owned_games`
+/// samo przez `cover_path`, a czas gry i tak zostaje uzupełniony później,
+/// centralnie, przez `playtime::merge_into` w `commands::list_games`).
+///
+/// `should_fetch` jest policzone PRZED wywołaniem (zamiast wołać
+/// `is_available`/`is_logged_in` tutaj) czysto z wygody wywołania —
+/// funkcja i tak nic nie robi, gdy `should_fetch` jest `false`, więc nie
+/// marnuje to żadnej pracy.
+///
+/// `fetch_owned` dostaje `installed_ids` PRZED wywołaniem (nie po), żeby
+/// providerzy, dla których dociąganie szczegółów każdej gry jest
+/// kosztowne sieciowo (dziś: GOG — patrz `gog::fetch_owned_games`), mogli
+/// pominąć zapytania dla gier, które i tak już są na liście, zamiast
+/// dociągać wszystko i dopiero potem odfiltrowywać duplikaty. Epic/Amazon
+/// dziś ten parametr ignorują (ich CLI zwraca tytuły/okładki dla całej
+/// biblioteki jednym, tanim, lokalnym wywołaniem — filtrowanie po fakcie
+/// nic tam nie kosztuje), ale sygnatura jest wspólna dla wszystkich
+/// trzech, żeby dało się je trzymać w jednej zmiennej `fn`.
+fn merge_owned_but_not_installed(
+    all_games: &mut Vec<Game>,
+    platform: Platform,
+    should_fetch: bool,
+    fetch_owned: fn(&std::collections::HashSet<String>) -> Vec<OwnedGame>,
+) {
+    if !should_fetch {
+        return;
+    }
+    let installed_ids: std::collections::HashSet<String> =
+        all_games.iter().filter(|g| g.platform == platform).map(|g| g.id.clone()).collect();
+
+    let owned = fetch_owned(&installed_ids);
+    if owned.is_empty() {
+        return;
+    }
+
+    for owned_game in owned {
+        if installed_ids.contains(&owned_game.id) {
+            // `fetch_owned` MOŻE (ale nie musi, patrz Epic/Amazon wyżej)
+            // sam już odfiltrować zainstalowane gry przed zwróceniem —
+            // ta sprawdzka tu to tylko dodatkowe zabezpieczenie przeciw
+            // duplikatom na liście, gdyby jednak tego nie zrobił.
+            continue;
+        }
+        all_games.push(Game {
+            id: owned_game.id,
+            title: owned_game.title,
+            platform,
+            installed: false,
+            install_dir: None,
+            cover_path: owned_game.cover_path,
+            playtime_minutes: None,
+        });
+    }
 }
 
 /// Buduje komendę uruchomienia gry, przeszukując odpowiedniego dostawcę wg
@@ -197,6 +422,8 @@ pub fn build_launch_command(platform: Platform, game_id: &str) -> Result<Command
         Platform::Gog => gog::GogProvider::default().launch_command(game_id),
         Platform::Amazon => amazon::AmazonProvider::default().launch_command(game_id),
         Platform::Lutris => lutris::LutrisProvider::default().launch_command(game_id),
+        Platform::Ea => ea::EaProvider::default().launch_command(game_id),
+        Platform::BattleNet => battlenet::BattleNetProvider::default().launch_command(game_id),
     }
 }
 
@@ -207,6 +434,8 @@ pub fn build_install_command(platform: Platform, game_id: &str) -> Result<Comman
         Platform::Gog => gog::GogProvider::default().install_command(game_id),
         Platform::Amazon => amazon::AmazonProvider::default().install_command(game_id),
         Platform::Lutris => lutris::LutrisProvider::default().install_command(game_id),
+        Platform::Ea => ea::EaProvider::default().install_command(game_id),
+        Platform::BattleNet => battlenet::BattleNetProvider::default().install_command(game_id),
     }
 }
 
@@ -217,6 +446,8 @@ pub fn build_uninstall_command(platform: Platform, game_id: &str) -> Result<Comm
         Platform::Gog => gog::GogProvider::default().uninstall_command(game_id),
         Platform::Amazon => amazon::AmazonProvider::default().uninstall_command(game_id),
         Platform::Lutris => lutris::LutrisProvider::default().uninstall_command(game_id),
+        Platform::Ea => ea::EaProvider::default().uninstall_command(game_id),
+        Platform::BattleNet => battlenet::BattleNetProvider::default().uninstall_command(game_id),
     }
 }
 
@@ -227,6 +458,8 @@ pub fn is_logged_in(platform: Platform) -> bool {
         Platform::Gog => gog::GogProvider::default().is_logged_in(),
         Platform::Amazon => amazon::AmazonProvider::default().is_logged_in(),
         Platform::Lutris => lutris::LutrisProvider::default().is_logged_in(),
+        Platform::Ea => ea::EaProvider::default().is_logged_in(),
+        Platform::BattleNet => battlenet::BattleNetProvider::default().is_logged_in(),
     }
 }
 
@@ -237,6 +470,8 @@ pub fn login_start(platform: Platform) -> Result<LoginFlow, StoreError> {
         Platform::Gog => gog::GogProvider::default().login_start(),
         Platform::Amazon => amazon::AmazonProvider::default().login_start(),
         Platform::Lutris => lutris::LutrisProvider::default().login_start(),
+        Platform::Ea => ea::EaProvider::default().login_start(),
+        Platform::BattleNet => battlenet::BattleNetProvider::default().login_start(),
     }
 }
 
@@ -247,17 +482,34 @@ pub fn login_submit(platform: Platform, code: &str) -> Result<(), StoreError> {
         Platform::Gog => gog::GogProvider::default().login_submit(code),
         Platform::Amazon => amazon::AmazonProvider::default().login_submit(code),
         Platform::Lutris => lutris::LutrisProvider::default().login_submit(code),
+        Platform::Ea => ea::EaProvider::default().login_submit(code),
+        Platform::BattleNet => battlenet::BattleNetProvider::default().login_submit(code),
     }
 }
 
-/// Dociąga rozszerzone informacje o grze (opis, zrzuty ekranu) do widoku
-/// szczegółów w UI. Obecnie zaimplementowane tylko dla Steam (publiczne,
-/// nieuwierzytelnione Store API) — Epic/GOG/Amazon wymagałyby osobnej
-/// integracji z ich katalogami, co jest sporym, oddzielnym zadaniem (patrz
-/// README, sekcja "Status komponentów").
+/// Dociąga opis i zrzuty ekranu do widoku szczegółów gry
+/// (`GameDetail.tsx`). Zaimplementowane tam, gdzie istnieje sensowne,
+/// PUBLICZNE źródło danych katalogowych bez potrzeby zgadywania
+/// prywatnego API:
+/// - Steam: publiczne, nieuwierzytelnione Store API (`steam.rs`).
+/// - GOG: publiczne, nieuwierzytelnione `api.gog.com` (`gog.rs`) —
+///   dokładnie ten sam endpoint co dla okładek, tylko z innymi polami
+///   `expand`.
+/// - Epic: BEZ żadnego zapytania sieciowego — `legendary` i tak już
+///   zapisuje pełne metadane katalogowe (opis, `keyImages`) lokalnie przy
+///   każdym `legendary list`, patrz `epic::fetch_store_details`.
+///
+/// Amazon/Lutris/EA/Battle.net: brak jakiegokolwiek udokumentowanego,
+/// publicznego API katalogowego (Amazon — `nile` go nie udostępnia;
+/// Lutris — publiczne `lutris.net/api/games/<slug>` nie zwraca opisu ani
+/// zrzutów ekranu, tylko podstawowe metadane typu rok/gatunek; EA/
+/// Battle.net — prywatne API, patrz moduły `ea-cli`/`bnet`) — pozostaje
+/// `None`, zamiast zgadywać nieistniejący endpoint.
 pub fn fetch_game_details(platform: Platform, game_id: &str) -> Option<GameDetails> {
     match platform {
         Platform::Steam => steam::fetch_store_details(game_id),
+        Platform::Gog => gog::fetch_store_details(game_id),
+        Platform::Epic => epic::fetch_store_details(game_id),
         _ => None,
     }
 }
