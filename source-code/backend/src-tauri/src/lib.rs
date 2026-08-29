@@ -1,7 +1,17 @@
+pub mod cloud_saves;
 pub mod commands;
+pub mod compat_tools;
+pub mod controllers;
 pub mod cover_cache;
+pub mod external_sources;
+pub mod first_run;
 pub mod launcher;
+pub mod net_cache;
+pub mod notifications;
+pub mod playtime;
+pub mod protondb;
 pub mod settings;
 pub mod state;
+pub mod steamgriddb;
 pub mod store_login;
 pub mod system;
