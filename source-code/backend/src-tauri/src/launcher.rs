@@ -17,10 +17,35 @@ const NEW_WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(300);
 const IPC_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Uruchamia grę z danej platformy po jej identyfikatorze (patrz
-/// `stores::Game::id`).
+/// `stores::Game::id`). Owija komendę zgodnie z ustawieniami
+/// `Settings::gaming_tools` (MangoHud/vkBasalt jako zmienne env,
+/// Gamescope jako zewnętrzny wrapper procesu) — patrz `apply_gaming_tools`.
 pub fn launch_game(app: AppHandle, state: State<AppState>, platform: Platform, game_id: String) -> Result<(), String> {
-    let cmd = stores::build_launch_command(platform, &game_id).map_err(|e| e.to_string())?;
-    run_wrapped(app, state, cmd, format!("{}:{}", platform.label(), game_id))
+    let mut cmd = stores::build_launch_command(platform, &game_id).map_err(|e| e.to_string())?;
+    let settings = state.settings.lock().unwrap();
+    let gaming_tools = settings.gaming_tools.clone();
+    // Mapowanie kontrolera per gra (patrz moduł-dokumentacja
+    // `controllers.rs`) — wstrzyknięte TYLKO gdy użytkownik jawnie
+    // skonfigurował je dla TEJ gry (`commands::set_game_controller_config`);
+    // bez wpisu zmienna po prostu nie jest ustawiana, więc gra dostaje
+    // dokładnie to środowisko, co przed dodaniem tej funkcji.
+    let controller_key = crate::commands::cover_override_key(platform, &game_id);
+    if let Some(config) = settings.game_controller_configs.get(&controller_key) {
+        cmd.env("SDL_GAMECONTROLLERCONFIG", config);
+    }
+    let custom_launch_prefix = settings.custom_launch_prefix.clone();
+    drop(settings);
+    let cmd = apply_gaming_tools(cmd, &gaming_tools);
+    // Globalny prefiks uruchamiania (`Settings::custom_launch_prefix`,
+    // np. `"gamemoderun"`) — nakładany jako NAJBARDZIEJ zewnętrzna
+    // warstwa, na zewnątrz Gamescope (patrz `wrap_with_custom_prefix`).
+    let cmd = wrap_with_custom_prefix(cmd, &custom_launch_prefix);
+    // `Some(...)` tylko tutaj (nie w `launch_store_client` niżej) — patrz
+    // `run_wrapped`/moduł-dokumentacja `playtime.rs`: liczymy czas gry
+    // TYLKO dla uruchomień konkretnej gry, nie dla samego otwarcia klienta
+    // sklepu (to nie jest "granie", tylko przeglądanie biblioteki).
+    let playtime_key = Some((platform.slug().to_string(), game_id.clone()));
+    run_wrapped(app, state, cmd, format!("{}:{}", platform.label(), game_id), playtime_key)
 }
 
 /// Uruchamia bezpośrednio klienta GUI danego sklepu/launchera (np. otwarcie
@@ -32,9 +57,32 @@ pub fn launch_store_client(app: AppHandle, state: State<AppState>, name: &str) -
         "heroic" => flatpak_command("com.heroicgameslauncher.hgl"),
         "hyperplay" => flatpak_command("xyz.hyperplay.HyperPlay"),
         "lutris" => native_command("lutris"),
+        // EA app / Battle.net nie mają "klienta" wywoływanego jedną
+        // komendą jak Steam/Lutris — trzeba najpierw znaleźć ich prefiks
+        // Wine (patrz `ea_cli`/`bnet`, moduły-dokumentacja). Współdzielimy
+        // tu tę samą logikę co `stores::ea::EaProvider::launch_command`/
+        // `battlenet::BattleNetProvider::launch_command`, tylko bez
+        // konkretnego `game_id` (bo tu uruchamiamy sam launcher, nie grę).
+        "ea" => {
+            let prefix = ea_cli::find_prefix(
+                crate::settings::Settings::load_or_default().ea_wine_prefix.as_deref().map(std::path::Path::new),
+            )
+            .map_err(|e| e.to_string())?;
+            ea_cli::build_launch_ea_app_command(&prefix).map_err(|e| e.to_string())?
+        }
+        "battlenet" => {
+            let prefix = bnet::find_prefix(
+                crate::settings::Settings::load_or_default().battlenet_wine_prefix.as_deref().map(std::path::Path::new),
+            )
+            .map_err(|e| e.to_string())?;
+            bnet::build_launch_battlenet_command(&prefix).map_err(|e| e.to_string())?
+        }
         other => return Err(format!("Nieznany klient sklepu: {other}")),
     };
-    run_wrapped(app, state, cmd, name.to_string())
+    // `None` — patrz komentarz w `launch_game`: to uruchomienie samego
+    // klienta/launchera, nie konkretnej gry, więc nie ma czego doliczyć do
+    // lokalnego licznika czasu gry.
+    run_wrapped(app, state, cmd, name.to_string(), None)
 }
 
 /// Instaluje grę (bez trybu wrapper — instalacja nie chowa powłoki, tylko
@@ -81,6 +129,7 @@ pub fn install_game(app: AppHandle, platform: Platform, game_id: String) -> Resu
     }
 
     let app_for_wait = app.clone();
+    let label_for_notify = label.clone();
     std::thread::spawn(move || {
         let status = child.wait();
         let ok = status.map(|s| s.success()).unwrap_or(false);
@@ -89,9 +138,34 @@ pub fn install_game(app: AppHandle, platform: Platform, game_id: String) -> Resu
             "hacker-mode://install-finished",
             serde_json::json!({ "label": label, "ok": ok }),
         );
+        // Powiadomienie systemowe — patrz moduł-dokumentacja
+        // `notifications.rs`: instalacja to typowa operacja W TLE,
+        // użytkownik mógł się w międzyczasie przełączyć na co innego.
+        // `Settings::notifications.on_install` pozwala to wyłączyć —
+        // patrz `commands::set_notification_settings`.
+        if notifications_enabled_for(&app_for_wait, |n| n.on_install) {
+            if ok {
+                crate::notifications::info("Instalacja zakończona", &label_for_notify);
+            } else {
+                crate::notifications::error("Instalacja nie powiodła się", &label_for_notify);
+            }
+        }
     });
 
     Ok(())
+}
+
+/// Sprawdza `Settings::notifications` przez `AppHandle::try_state`
+/// (patrz `exit_wrapper_mode` po ten sam wzorzec) — używane wszędzie
+/// tam, gdzie tylko `AppHandle` jest dostępny (np. wewnątrz wątków
+/// czekających na zakończenie procesu), nie `State<AppState>`. Domyślnie
+/// (gdyby z jakiegoś powodu stan nie był dostępny) zwraca `true` —
+/// brak pewności co do ustawienia nie powinien po cichu wyciszać
+/// powiadomień, tylko ostrożnie je pokazywać.
+fn notifications_enabled_for(app: &AppHandle, get: impl Fn(&crate::settings::NotificationSettings) -> bool) -> bool {
+    app.try_state::<AppState>()
+        .map(|state| get(&state.settings.lock().unwrap().notifications))
+        .unwrap_or(true)
 }
 
 pub fn uninstall_game(app: AppHandle, platform: Platform, game_id: String) -> Result<(), String> {
@@ -108,6 +182,13 @@ pub fn uninstall_game(app: AppHandle, platform: Platform, game_id: String) -> Re
             "hacker-mode://uninstall-finished",
             serde_json::json!({ "label": label, "ok": ok }),
         );
+        if notifications_enabled_for(&app, |n| n.on_install) {
+            if ok {
+                crate::notifications::info("Odinstalowano", &label);
+            } else {
+                crate::notifications::error("Odinstalowanie nie powiodło się", &label);
+            }
+        }
     });
     Ok(())
 }
@@ -144,7 +225,111 @@ fn native_command(bin: &str) -> Command {
     Command::new(bin)
 }
 
-fn run_wrapped(app: AppHandle, state: State<AppState>, mut cmd: Command, label: String) -> Result<(), String> {
+/// Owija komendę uruchamiającą grę zgodnie z ustawieniami
+/// `Settings::gaming_tools` (checkboxy w `Settings.tsx`). Wcześniej te
+/// ustawienia były zapisywane do `config.json`, ale nigdzie nie
+/// wpływały na faktyczne uruchomienie gry — ta funkcja to naprawia:
+///
+/// - **MangoHud**: ustawia zmienną env `MANGOHUD=1`, którą overlay
+///   MangoHud odczytuje, żeby się aktywować (standardowy sposób jego
+///   włączania bez modyfikowania samej komendy gry).
+/// - **vkBasalt**: analogicznie, `ENABLE_VKBASALT=1`.
+/// - **Gamescope**: to nie zmienna env, tylko osobny proces, który musi
+///   opakować (`exec`) oryginalną komendę — stąd `wrap_with_gamescope`,
+///   które przenosi program/argumenty/env oryginalnej komendy pod
+///   `gamescope -- <oryginalny program> <argumenty>`.
+fn apply_gaming_tools(cmd: Command, tools: &crate::settings::GamingTools) -> Command {
+    let mut cmd = cmd;
+    if tools.mangohud {
+        cmd.env("MANGOHUD", "1");
+    }
+    if tools.vkbasalt {
+        cmd.env("ENABLE_VKBASALT", "1");
+    }
+    if tools.gamescope {
+        cmd = wrap_with_gamescope(cmd);
+    }
+    cmd
+}
+
+/// Owija `original` globalnym prefiksem uruchamiania
+/// (`Settings::custom_launch_prefix`) — ten sam mechanizm przenoszenia
+/// programu/argumentów/env co `wrap_with_gamescope` (patrz jej
+/// dokumentacja), tylko z konfigurowalnym poleceniem zamiast na sztywno
+/// `"gamescope"`. Zwraca `original` bez zmian, jeśli prefiks jest pusty/
+/// nieustawiony — więc bezpiecznie wywoływać zawsze, bez osobnego `if`
+/// w miejscu wywołania.
+fn wrap_with_custom_prefix(original: Command, prefix: &Option<String>) -> Command {
+    let Some(prefix) = prefix else { return original };
+    let mut words = prefix.split_whitespace();
+    let Some(first) = words.next() else { return original };
+    let rest: Vec<&str> = words.collect();
+
+    let program = original.get_program().to_owned();
+    let args: Vec<std::ffi::OsString> = original.get_args().map(|a| a.to_owned()).collect();
+    let envs: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = original
+        .get_envs()
+        .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+        .collect();
+
+    let mut wrapped = Command::new(first);
+    wrapped.args(&rest);
+    wrapped.arg(&program);
+    wrapped.args(&args);
+    for (key, value) in envs {
+        match value {
+            Some(value) => {
+                wrapped.env(key, value);
+            }
+            None => {
+                wrapped.env_remove(key);
+            }
+        }
+    }
+    wrapped
+}
+
+/// Przenosi program/argumenty/zmienne env z `original` pod `gamescope --
+/// <original>`, tak by cała gra (włącznie z ewentualnymi env-ami
+/// ustawionymi przez `apply_gaming_tools` wcześniej, np. `MANGOHUD=1`)
+/// wystartowała wewnątrz sesji Gamescope zamiast bezpośrednio.
+///
+/// Korzysta z `Command::get_program`/`get_args`/`get_envs` (stabilne w
+/// std od dawna) zamiast przebudowywać komendę od zera z osobnych pól —
+/// dzięki temu nie trzeba duplikować logiki budowania argumentów z
+/// `commands/stores/*.rs` w tym module.
+fn wrap_with_gamescope(original: Command) -> Command {
+    let program = original.get_program().to_owned();
+    let args: Vec<std::ffi::OsString> = original.get_args().map(|a| a.to_owned()).collect();
+    let envs: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = original
+        .get_envs()
+        .map(|(k, v)| (k.to_owned(), v.map(|v| v.to_owned())))
+        .collect();
+
+    let mut wrapped = Command::new("gamescope");
+    wrapped.arg("--");
+    wrapped.arg(&program);
+    wrapped.args(&args);
+    for (key, value) in envs {
+        match value {
+            Some(value) => {
+                wrapped.env(key, value);
+            }
+            None => {
+                wrapped.env_remove(key);
+            }
+        }
+    }
+    wrapped
+}
+
+fn run_wrapped(
+    app: AppHandle,
+    state: State<AppState>,
+    mut cmd: Command,
+    label: String,
+    playtime_key: Option<(String, String)>,
+) -> Result<(), String> {
     // Debounce: unikamy przypadkowego wielokrotnego odpalenia tej samej
     // aplikacji przy podwójnym kliknięciu / powtórzonym evencie z pada.
     static LAST_LAUNCH: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
@@ -181,9 +366,47 @@ fn run_wrapped(app: AppHandle, state: State<AppState>, mut cmd: Command, label: 
     }
 
     cmd.env("XDG_SESSION_TYPE", "wayland");
+    // Kopia zapasowa zapisu po zamknięciu gry (patrz moduł-dokumentacja
+    // `cloud_saves.rs`) — dane potrzebne do niej (katalog kopii
+    // zapasowych + ścieżka zapisu TEJ gry, jeśli skonfigurowana)
+    // wyciągamy z ustawień TERAZ, przed odpaleniem wątku czekającego na
+    // zakończenie procesu, bo `State<AppState>` nie przenosi się do
+    // `std::thread::spawn` (jego czas życia jest związany z wywołaniem
+    // komendy Tauri) — ten sam wzorzec co `gaming_tools`/
+    // `game_controller_configs` wyżej w tej funkcji.
+    let auto_backup_config = playtime_key.as_ref().and_then(|(platform_slug, game_id)| {
+        let settings = state.settings.lock().unwrap();
+        let backup_root = settings.cloud_saves_backup_dir.clone()?;
+        let save_path = settings.game_save_paths.get(&format!("{platform_slug}:{game_id}"))?.clone();
+        Some((backup_root, save_path))
+    });
+    // Znacznik czasu startu — jedyny sposób, w jaki Hacker Mode może
+    // zmierzyć czas gry dla platform bez własnego API (patrz
+    // moduł-dokumentacja `playtime.rs`): różnica między tym momentem a
+    // momentem, w którym proces faktycznie się zakończy (`child.wait()`
+    // niżej), niezależnie od tego, czy `playtime_key` jest w ogóle
+    // ustawiony — licznik czasu i tak jest tani (jeden `Instant::now()`),
+    // więc prościej zawsze go mieć niż rozgałęziać kod na dwie wersje.
+    let started_at = Instant::now();
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Nie udało się uruchomić „{label}”: {e}"))?;
+
+    // Rejestrujemy PID w `AppState::running_games` i powiadamiamy frontend
+    // (`hacker-mode://game-launched`) — TYLKO dla realnego uruchomienia
+    // gry (`playtime_key.is_some()`), nie dla samego otwarcia klienta
+    // sklepu (`launch_store_client`, gdzie `playtime_key` jest `None`) —
+    // patrz moduł-dokumentacja `AppState::running_games` po ważne
+    // zastrzeżenie dotyczące Steam (PID to proces polecenia uruchomienia,
+    // nie samej gry).
+    if let Some((platform_slug, game_id)) = &playtime_key {
+        let key = format!("{platform_slug}:{game_id}");
+        state.running_games.lock().unwrap().insert(key, child.id());
+        let _ = app.emit(
+            "hacker-mode://game-launched",
+            serde_json::json!({ "platform": platform_slug, "gameId": game_id, "label": label }),
+        );
+    }
 
     let app_for_thread = app.clone();
     let wrapper_enabled_for_thread = wrapper_enabled && !is_dev;
@@ -202,7 +425,81 @@ fn run_wrapped(app: AppHandle, state: State<AppState>, mut cmd: Command, label: 
 
     std::thread::spawn(move || {
         let status = child.wait();
+        let seconds_ran = started_at.elapsed().as_secs();
         tracing::info!(label = %label, ?status, "Proces zakończony");
+        let ok = status.map(|s| s.success()).unwrap_or(false);
+
+        if let Some((platform_slug, game_id)) = &playtime_key {
+            // Zaokrąglenie w dół następuje RAZ, tutaj, na sumie sekund
+            // całej sesji — patrz komentarz w `playtime::add_minutes` o
+            // tym, dlaczego to ważne (żeby wielokrotne krótkie sesje nie
+            // gubiły czasu przez zaokrąglanie przy każdym pojedynczym
+            // zapisie).
+            let minutes = seconds_ran / 60;
+            crate::playtime::add_minutes(platform_slug, game_id, minutes);
+            crate::playtime::record_session(platform_slug, game_id, minutes);
+
+            // Usuwamy z `running_games` i powiadamiamy frontend — patrz
+            // `enter_wrapper_mode`/`exit_wrapper_mode` wyżej po ten sam
+            // wzorzec (`app_handle.try_state::<AppState>()` zamiast
+            // `State<AppState>`, którego nie da się przenieść do wątku).
+            if let Some(app_state) = app_for_thread.try_state::<AppState>() {
+                let key = format!("{platform_slug}:{game_id}");
+                app_state.running_games.lock().unwrap().remove(&key);
+            }
+            let _ = app_for_thread.emit(
+                "hacker-mode://game-exited",
+                serde_json::json!({
+                    "platform": platform_slug,
+                    "gameId": game_id,
+                    "label": &label,
+                    "ok": ok,
+                    "secondsRan": seconds_ran,
+                }),
+            );
+
+            // Powiadomienie systemowe TYLKO gdy coś wyglądało na crash
+            // (błąd LUB bardzo krótka sesja) — normalne zamknięcie gry po
+            // rozsądnym czasie NIE generuje powiadomienia (użytkownik i
+            // tak w tym momencie prawdopodobnie patrzy na ekran, skoro
+            // właśnie zamknął grę — powiadomienie o czymś oczywistym
+            // byłoby tylko szumem, patrz `notifications.rs` moduł-dokumentacja
+            // o zasadzie "tylko operacje w tle, których zakończenia można
+            // nie zauważyć"). Ten sam próg 8s co heurystyka w UI
+            // (`GameCard.tsx`/`GameDetail.tsx`) — potencjalnie warto to
+            // kiedyś ujednolicić w jedną stałą dzieloną między frontem a
+            // backendem, dziś zduplikowane w dwóch miejscach.
+            const CRASH_THRESHOLD_SECONDS: u64 = 8;
+            if (!ok || seconds_ran < CRASH_THRESHOLD_SECONDS) && notifications_enabled_for(&app_for_thread, |n| n.on_game_exit) {
+                crate::notifications::error(
+                    "Gra mogła się nie uruchomić poprawnie",
+                    &format!("{label} zamknęła się po {seconds_ran}s{}", if !ok { " z błędem" } else { "" }),
+                );
+            }
+        }
+
+        // Automatyczna kopia zapasowa zapisu — TYLKO gdy użytkownik
+        // skonfigurował zarówno katalog kopii zapasowych (Ustawienia →
+        // Kopie zapasowe), jak i ścieżkę zapisu TEJ gry
+        // (`GameDetail.tsx`, patrz `auto_backup_config` wyżej). Cicha przy
+        // sukcesie w logu (tylko `debug!`), ale zawsze z powiadomieniem
+        // systemowym o BŁĘDZIE — to jedyny moment, w którym użytkownik
+        // mógłby nie zauważyć, że automatyczna kopia akurat zawiodła
+        // (np. bo dysk się zapełnił), skoro dzieje się to całkowicie w
+        // tle po zamknięciu gry.
+        if let (Some((platform_slug, game_id)), Some((backup_root, save_path))) = (&playtime_key, &auto_backup_config) {
+            match crate::cloud_saves::backup_now(std::path::Path::new(backup_root), platform_slug, game_id, save_path) {
+                Ok(entry) => {
+                    tracing::debug!(file = %entry.file_name, "Automatyczna kopia zapasowa zapisu utworzona");
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "Automatyczna kopia zapasowa zapisu nie powiodła się");
+                    if notifications_enabled_for(&app_for_thread, |n| n.on_backup_error) {
+                        crate::notifications::error("Kopia zapasowa zapisu nie powiodła się", &err);
+                    }
+                }
+            }
+        }
 
         if wrapper_enabled_for_thread {
             exit_wrapper_mode(&app_for_thread);
@@ -250,8 +547,23 @@ pub fn restart_apps(app: &AppHandle) -> ActionSummary {
     let targets = ["steam", "heroic", "hyperplay", "lutris", "legendary", "gogdl", "nile"];
     let mut killed = Vec::new();
     for target in targets {
-        if Command::new("pkill").args(["-f", target]).status().is_ok() {
-            killed.push(target.to_string());
+        // BUGFIX: `Command::status()` zwraca `Ok(ExitStatus)` nawet gdy
+        // `pkill` nie znalazł żadnego pasującego procesu (`pkill` kończy
+        // się wtedy kodem 1 — to wciąż `Ok` z punktu widzenia Rusta,
+        // `Err` byłby tylko, gdyby samego `pkill` nie dało się
+        // uruchomić). Poprzednia wersja sprawdzała `.is_ok()`, więc
+        // `killed` zawierało WSZYSTKIE targety niezależnie od tego, czy
+        // cokolwiek faktycznie zabito — trzeba sprawdzić
+        // `status.success()`.
+        match Command::new("pkill").args(["-f", target]).status() {
+            Ok(status) if status.success() => killed.push(target.to_string()),
+            Ok(_) => {
+                // `pkill` uruchomił się poprawnie, ale nic nie pasowało —
+                // ten target po prostu nie był uruchomiony, to nie błąd.
+            }
+            Err(e) => {
+                tracing::debug!(target, error = %e, "Nie udało się uruchomić `pkill`");
+            }
         }
     }
     exit_wrapper_mode(app);
@@ -261,4 +573,59 @@ pub fn restart_apps(app: &AppHandle) -> ActionSummary {
 #[derive(serde::Serialize)]
 pub struct ActionSummary {
     pub killed: Vec<String>,
+}
+
+/// Czy Hacker Mode ma zarejestrowany PID dla danej gry — patrz
+/// `AppState::running_games`. Odpytywane przez frontend przy wejściu na
+/// widok (`GameDetail.tsx`/`GameCard.tsx`), żeby od razu pokazać stan
+/// "w trakcie gry" nawet bez odebrania zdarzenia `game-launched` (np. po
+/// przejściu na inny widok i powrocie — zdarzenia Tauri nie mają
+/// historii, nowy listener nie widzi zdarzeń sprzed jego rejestracji).
+pub fn is_game_running(state: &State<AppState>, platform: Platform, game_id: &str) -> bool {
+    let key = format!("{}:{game_id}", platform.slug());
+    state.running_games.lock().unwrap().contains_key(&key)
+}
+
+/// Zatrzymuje uruchomioną grę, wysyłając sygnał do zarejestrowanego PID-u
+/// (patrz `AppState::running_games`) — `force: false` wysyła SIGTERM
+/// (grzeczna prośba o zamknięcie, gra może dokończyć zapis stanu),
+/// `force: true` wysyła SIGKILL (natychmiastowe zabicie, gdy SIGTERM nie
+/// podziałał — patrz przycisk "Wymuś zamknięcie" w `GameDetail.tsx`,
+/// pokazywany dopiero gdy zwykłe "Zatrzymaj" nie pomogło po kilku
+/// sekundach). Nie usuwa PID-u z `running_games` samodzielnie — to i tak
+/// zrobi wątek w `run_wrapped` czekający na `child.wait()`, gdy proces
+/// faktycznie się zakończy (jedno źródło prawdy o tym, czy gra
+/// naprawdę już nie działa, zamiast dwóch niezależnych miejsc, które
+/// mogłyby się rozjechać).
+///
+/// UWAGA dla Steam (patrz `AppState::running_games`): jeśli Steam już
+/// działał w momencie uruchomienia, zarejestrowany PID to proces
+/// polecenia `steam -applaunch`, które kończy się niemal natychmiast po
+/// przekazaniu żądania — w praktyce nie ma go już w `running_games` do
+/// zabicia. Z tego powodu `GameDetail.tsx`/`GameCard.tsx` w ogóle nie
+/// pokazują przycisku "Zatrzymaj" dla Steam, żeby nie sugerować
+/// funkcjonalności, która i tak nic by nie zrobiła.
+pub fn stop_game(state: &State<AppState>, platform: Platform, game_id: &str, force: bool) -> Result<(), String> {
+    let key = format!("{}:{game_id}", platform.slug());
+    let pid = state
+        .running_games
+        .lock()
+        .unwrap()
+        .get(&key)
+        .copied()
+        .ok_or("Ta gra nie jest aktualnie uruchomiona (albo Hacker Mode stracił jej ślad — patrz ograniczenie dla Steam)")?;
+
+    let signal = if force { "-KILL" } else { "-TERM" };
+    let status = Command::new("kill")
+        .args([signal, &pid.to_string()])
+        .status()
+        .map_err(|e| format!("Nie udało się uruchomić `kill`: {e}"))?;
+    if !status.success() {
+        // Najczęstsza przyczyna: proces już się zakończył sam
+        // (wyścig między kliknięciem "Zatrzymaj" a naturalnym końcem gry)
+        // — `kill` na nieistniejącym PID-zie kończy się błędem, co tutaj
+        // NIE jest traktowane jako poważny błąd, tylko zgłaszane wprost.
+        return Err(format!("`kill` nie zdołał zatrzymać procesu {pid} (mógł się już zakończyć)"));
+    }
+    Ok(())
 }
