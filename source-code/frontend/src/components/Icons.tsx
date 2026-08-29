@@ -108,3 +108,11 @@ export const IconBack: Component<IconProps> = (p) => (
     <path d="M4 12h16" />
   </svg>
 );
+
+export const IconStats: Component<IconProps> = (p) => (
+  <svg {...base(p.size)} style={p.style}>
+    <path d="M4 20V10" />
+    <path d="M11 20V4" />
+    <path d="M18 20v-7" />
+  </svg>
+);
