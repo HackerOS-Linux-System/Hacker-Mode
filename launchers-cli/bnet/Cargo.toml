@@ -1,1 +1,23 @@
+[package]
+name = "bnet"
+version = "0.5.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Detekcja/uruchamianie Battle.net pod Wine + REALNE odpytywanie protokołu Ribbit (odkrywanie wersji/CDN dla produktów NGDP) przez ribbit-client z projektu cascette-rs. Statycznie linkowane do binarki hacker-mode. Patrz src/lib.rs i src/ribbit.rs po pełny opis zakresu i źródła."
 
+[dependencies]
+thiserror = "1"
+which = "6"
+dirs = "5"
+# Prawdziwy, aktualnie utrzymywany klient protokołu Ribbit (odkrywanie
+# wersji/CDN dla produktów Blizzarda) z projektu cascette-rs
+# (https://github.com/wowemulation-dev/cascette-rs, Apache-2.0/MIT). To
+# NIE jest wrapper na Lutrisa/Wine — to prawdziwa reimplementacja
+# fragmentu protokołu NGDP, analogicznie do tego, czym `legendary` jest
+# dla Epic. Patrz `src/ribbit.rs`.
+ribbit-client = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"
