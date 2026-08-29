@@ -1,14 +1,98 @@
-:root {
-  --bg: #0d0f10;
-  --bg-elevated: #17191b;
-  --bg-card: #1c1f21;
+:root,
+[data-theme="dark"] {
+  --bg: #0a0b0d;
+  --bg-elevated: #131519;
+  --bg-card: #1a1d21;
+  --bg-card-hover: #202329;
   --accent: #ff3b3b;
+  --accent-bright: #ff6b6b;
   --accent-dim: #8f1f1f;
+  --accent-glow: rgba(255, 59, 59, 0.35);
+  /* Zielony "fosfor" ekranu CRT — drugi, celowo oszczędnie używany kolor
+     sygnałowy (stany "dostępne"/"pozytywne": zalogowano, narzędzie już
+     zainstalowane), żeby paleta nie opierała się WYŁĄCZNIE na jednym
+     akcencie na czerni (typowy, "domyślny" wygląd AI-generowanego UI) —
+     tu ma to uzasadnienie w samym motywie: terminal/CRT to część
+     tożsamości "Hacker Mode". */
+  --phosphor: #39ff88;
   --text: #eef1f0;
   --text-muted: #9aa3a0;
   --danger: #ff5b5b;
+  --border: rgba(255, 255, 255, 0.08);
   --radius: 14px;
+  --radius-sm: 8px;
+  --shadow-card: 0 8px 24px -8px rgba(0, 0, 0, 0.5);
   --font: "Inter", "Segoe UI", system-ui, sans-serif;
+  /* Para monospace do "danych" (odznaki platform, etykiety-prompty,
+     liczby na pulpicie) — świadomy, tematycznie uzasadniony wybór
+     (terminal), nie przypadkowa druga rodzina fontów. Cała lista to
+     powszechnie dostępne fonty deweloperskie na Linuksie + bezpieczny,
+     uniwersalny fallback `monospace` (bez pobierania czegokolwiek z
+     sieci — CSP tej apki i tak by na to nie pozwoliło). */
+  --font-mono: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+/* Motyw "Midnight Blue" — ten sam layout, chłodniejsza, niebieska
+   paleta zamiast domyślnej czerwonej. Wybierany w Ustawienia → Ogólne. */
+[data-theme="midnight"] {
+  --bg: #080a11;
+  --bg-elevated: #10141f;
+  --bg-card: #151b2a;
+  --bg-card-hover: #1b2233;
+  --accent: #4d8dff;
+  --accent-bright: #7aacff;
+  --accent-dim: #1f3d8f;
+  --accent-glow: rgba(77, 141, 255, 0.35);
+  --phosphor: #39ff88;
+  --text: #e9edf5;
+  --text-muted: #8f9bb8;
+  --danger: #ff5b5b;
+  --border: rgba(255, 255, 255, 0.08);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --shadow-card: 0 8px 24px -8px rgba(0, 0, 0, 0.5);
+  --font: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+/* Motyw jasny — zachowuje ten sam akcent co domyślny ciemny, ale odwraca
+   tło/tekst. `.game-card .cover` (gradient placeholderu bez okładki) ma
+   dopasowany, jaśniejszy wariant niżej. */
+[data-theme="light"] {
+  --bg: #f4f5f6;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f7f7f8;
+  --accent: #d92626;
+  --accent-bright: #ef4444;
+  --accent-dim: #f5b8b8;
+  --accent-glow: rgba(217, 38, 38, 0.25);
+  --phosphor: #0a8f4a;
+  --text: #16181a;
+  --text-muted: #676f72;
+  --danger: #c62828;
+  --border: rgba(0, 0, 0, 0.08);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --shadow-card: 0 8px 24px -8px rgba(0, 0, 0, 0.15);
+  --font: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+[data-theme="light"] .game-card {
+  border-color: var(--border);
+}
+
+[data-theme="light"] .game-card .cover {
+  background: linear-gradient(145deg, #e8e9eb, #d8dadd);
+}
+
+[data-theme="light"] .ghost-btn {
+  border-color: var(--border);
+}
+
+[data-theme="light"] .settings-row {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
 }
 
 * {
@@ -21,19 +105,59 @@ html, body, #root {
 }
 
 body {
-  background: var(--bg);
+  /* Delikatna winieta pod całą apką zamiast płaskiej jednolitej czerni —
+     tani, bezpieczny (czyste gradienty CSS, zero sieci/CSP-ryzyka) sposób
+     na trochę głębi bez odciągania uwagi od treści. */
+  background: radial-gradient(ellipse 1200px 800px at 15% -10%, rgba(255, 59, 59, 0.06), transparent 60%), var(--bg);
   color: var(--text);
   font-family: var(--font);
   overflow: hidden;
   user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+button, input, select {
+  font-family: inherit;
 }
 
 button {
-  font-family: inherit;
   cursor: pointer;
   border: none;
-  outline: none;
   color: inherit;
+  background: none;
+}
+
+/* BUGFIX/A11Y: `outline: none` na przyciskach (niżej) usuwał domyślny
+   pierścień fokusu przeglądarki i NIC go nie zastępowało w większości
+   miejsc — w apce nawigowanej padem/klawiaturą (patrz `focusNav.ts`,
+   `data-focusable`) oznaczało to, że po przejściu fokusu na przycisk nie
+   było widać GDZIE on jest. Ten pierścień (poświata w kolorze akcentu,
+   nie generyczny niebieski) obejmuje WSZYSTKO, co `focusNav.ts` umie
+   zaznaczyć, więc naprawia to systemowo w jednym miejscu zamiast
+   punktowo. `:focus-visible` (nie zwykłe `:focus`) — pierścień pojawia
+   się tylko przy nawigacji klawiaturą/padem, nie przy kliknięciu myszką,
+   zgodnie z tym, jak przeglądarki już to rozróżniają natywnie. */
+[data-focusable]:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px var(--accent-glow);
+  border-radius: var(--radius-sm);
+}
+
+input, select {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 
 .app-shell {
@@ -50,18 +174,21 @@ button {
   align-items: center;
   padding: 20px 0;
   gap: 8px;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid var(--border);
 }
 
 .sidebar .logo {
+  font-family: var(--font-mono);
   font-weight: 800;
   color: var(--accent);
-  font-size: 22px;
+  font-size: 20px;
   margin-bottom: 24px;
-  letter-spacing: -1px;
+  letter-spacing: -0.5px;
+  text-shadow: 0 0 18px var(--accent-glow);
 }
 
 .nav-btn {
+  position: relative;
   width: 64px;
   height: 64px;
   border-radius: var(--radius);
@@ -82,6 +209,23 @@ button {
   color: var(--accent);
 }
 
+/* Pionowa kreska-wskaźnik przy aktywnej sekcji — hugging lewej krawędzi
+   paska bocznego (patrz komentarz o `left: -16px`: `.sidebar` ma
+   `padding: 20px 0`, `.nav-btn` (64px) jest wyśrodkowany w kolumnie
+   96px, więc 16px to dokładnie odległość do jej lewej krawędzi). */
+.nav-btn.active::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 26px;
+  background: var(--accent);
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
 .content {
   padding: 36px 44px;
   overflow-y: auto;
@@ -91,6 +235,23 @@ button {
   font-size: 28px;
   font-weight: 700;
   margin-bottom: 24px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* Sygnatura wizualna Hacker Mode: prompt terminala przed każdym tytułem
+   strony — zamiast dorzucać kolejny generyczny gradientowy akcent,
+   nawiązuje wprost do tego, czym ta apka jest (nazwa, klimat "hackera").
+   Świadomie tylko TU i w nagłówkach paneli ustawień (`.settings-panel
+   h3` niżej) — reszta UI zostaje spokojna, jak radzi zasada "jedno
+   miejsce na odwagę projektową". */
+.page-title::before {
+  content: "❯";
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 400;
 }
 
 .grid {
@@ -100,23 +261,49 @@ button {
 }
 
 .game-card {
+  position: relative;
   background: var(--bg-card);
   border-radius: var(--radius);
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  transition: transform 0.12s, border-color 0.12s;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .game-card:hover,
 .game-card:focus-within {
-  transform: translateY(-3px);
+  transform: translateY(-4px);
   border-color: var(--accent-dim);
+  background: var(--bg-card-hover);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--accent-glow);
+}
+
+/* Delikatne przemiatanie "skanlinią" po okładce przy najechaniu/fokusie —
+   jeden, oszczędnie użyty moment ruchu (nie ciągła animacja w tle),
+   nawiązujący do CRT/terminala. Wyłączone całkowicie przy
+   `prefers-reduced-motion` (patrz reguła wyżej, zeruje czas trwania). */
+.game-card .cover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 0%, var(--accent-glow) 45%, transparent 55%);
+  transform: translateY(-120%);
+  opacity: 0;
+  transition: transform 0.5s ease, opacity 0.5s ease;
+  pointer-events: none;
+}
+
+.game-card:hover .cover::after,
+.game-card:focus-within .cover::after {
+  transform: translateY(20%);
+  opacity: 1;
 }
 
 .game-card .cover {
+  position: relative;
   aspect-ratio: 3 / 4;
   border-radius: 10px;
   background: linear-gradient(145deg, #23262a, #141617);
@@ -127,6 +314,7 @@ button {
   font-size: 13px;
   text-align: center;
   padding: 8px;
+  overflow: hidden;
 }
 
 .game-card .title {
@@ -137,6 +325,7 @@ button {
 
 .badge {
   display: inline-block;
+  font-family: var(--font-mono);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -148,7 +337,7 @@ button {
 }
 
 .primary-btn {
-  background: var(--accent);
+  background: linear-gradient(155deg, var(--accent-bright), var(--accent));
   color: #140606;
   font-weight: 700;
   padding: 10px 18px;
@@ -157,10 +346,24 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  box-shadow: 0 4px 14px -4px var(--accent-glow);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
 }
 
 .primary-btn:hover {
-  background: #ff6b6b;
+  filter: brightness(1.08);
+  box-shadow: 0 6px 20px -4px var(--accent-glow);
+}
+
+.primary-btn:active {
+  transform: translateY(1px);
+}
+
+.primary-btn:disabled {
+  filter: grayscale(0.6);
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .ghost-btn {
@@ -168,15 +371,17 @@ button {
   color: var(--text);
   padding: 10px 18px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .ghost-btn:hover {
   border-color: var(--accent-dim);
+  background: var(--bg-card-hover);
 }
 
 .tabs {
@@ -192,6 +397,13 @@ button {
   color: var(--text-muted);
   font-size: 13px;
   font-weight: 600;
+  border: 1px solid transparent;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.tab:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
 }
 
 .tab.active {
@@ -204,14 +416,24 @@ button {
   border-radius: var(--radius);
   padding: 20px 22px;
   margin-bottom: 18px;
+  border: 1px solid var(--border);
 }
 
 .settings-panel h3 {
   margin: 0 0 14px;
-  font-size: 15px;
-  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-panel h3::before {
+  content: "❯";
+  opacity: 0.8;
 }
 
 .settings-row {
@@ -219,7 +441,7 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--border);
 }
 
 .settings-row:last-child {
@@ -245,12 +467,64 @@ button {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
 }
 
 .empty-state {
   color: var(--text-muted);
   font-size: 14px;
-  padding: 40px 0;
+  padding: 60px 20px;
   text-align: center;
+  font-family: var(--font-mono);
+}
+
+.empty-state::after {
+  content: "_";
+  color: var(--accent);
+  animation: blink 1.1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-state::after {
+    animation: none;
+  }
+}
+
+/* Rząd przycisków uruchamiania klientów sklepów (Home.tsx) — celowo
+   odróżniony od zwykłego `.ghost-btn` używanego wszędzie indziej: to
+   pierwsza rzecz obok tytułu, jaką widać na starcie, więc dostaje trochę
+   więcej obecności (większy odstęp liter, monospace jak reszta "danych"
+   w tym motywie) bez przechodzenia w pełny `.primary-btn`. */
+.launcher-btn {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  padding: 12px 20px;
+}
+
+/* Pasek przewijania — dopasowany do motywu zamiast domyślnego,
+   nachalnego jasnoszarego paska przeglądarki (drobny, ale zauważalny
+   szczegół "dopracowania" na dużym ekranie). */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-card-hover);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-dim);
 }
