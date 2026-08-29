@@ -9,11 +9,33 @@ fn cache_dir() -> PathBuf {
         .join("covers")
 }
 
+/// Buduje klienta HTTP współdzielony między wieloma pobraniami okładek
+/// (np. całą biblioteką jednego sklepu pobieraną równolegle w
+/// `list_games`). Współdzielenie jednego `Client`-a zamiast budowania go
+/// od nowa dla każdej okładki pozwala reqwestowi utrzymać pulę połączeń
+/// (keep-alive) i uniknąć osobnego handshake'u TLS per obrazek — istotne
+/// przy bibliotece liczącej dziesiątki/setki gier. `reqwest::blocking::Client`
+/// jest `Send + Sync` i celowo klonowalny małym kosztem (trzyma `Arc`
+/// wewnątrz), więc bezpiecznie przekazywać `&Client` do wielu wątków przez
+/// `std::thread::scope`.
+pub fn build_client() -> Option<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .user_agent("HackerMode/0.3")
+        .build()
+        .ok()
+}
+
 /// Pobiera obraz spod `url` i zapisuje go w lokalnym cache pod `cache_key`
 /// (zwykle `<platforma>-<id_gry>`), o ile jeszcze go tam nie ma. Zwraca
 /// ścieżkę do lokalnego pliku. Błędy sieciowe są ciche (zwracają `None`) —
 /// brak okładki nie powinien nigdy blokować wyświetlenia gry w bibliotece.
-pub fn cache_image(url: &str, cache_key: &str) -> Option<String> {
+///
+/// Przyjmuje `client` od wywołującego (zamiast budować go za każdym razem)
+/// właśnie po to, żeby dało się go współdzielić przy równoległym pobieraniu
+/// wielu okładek naraz — patrz `build_client` i wywołania w
+/// `commands/stores/{epic,gog}.rs::list_games`.
+pub fn cache_image(url: &str, cache_key: &str, client: &reqwest::blocking::Client) -> Option<String> {
     let dir = cache_dir();
     let ext = url.rsplit('.').next().filter(|e| e.len() <= 4).unwrap_or("jpg");
     let path = dir.join(format!("{cache_key}.{ext}"));
@@ -23,12 +45,6 @@ pub fn cache_image(url: &str, cache_key: &str) -> Option<String> {
     }
 
     std::fs::create_dir_all(&dir).ok()?;
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent("HackerMode/0.3")
-        .build()
-        .ok()?;
 
     let response = client.get(url).send().ok()?;
     if !response.status().is_success() {
