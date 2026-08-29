@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "ipc",
+    "launchers-cli/ea-cli",
+    "launchers-cli/bnet",
     "source-code/backend/src-tauri",
 ]
 # Hacker Mode nie ma już własnego kompozytora (dawne `compositor/`,
@@ -12,9 +14,18 @@ members = [
 # budowanie tego workspace'u NIE wymaga checkoutu ani kompilacji
 # repozytorium HWDE; tylko obecności binarki `comphwde` w PATH w
 # czasie działania sesji.
+#
+# `launchers-cli/` to dwie biblioteki (ea-cli, bnet) statycznie linkowane
+# do binarki `hacker-mode` — odpowiadają za wykrywanie i uruchamianie EA
+# app / Battle.net zainstalowanych pod Wine. W przeciwieństwie do
+# Epic/GOG/Amazon (obsługiwanych przez zewnętrzne binarki `legendary`/
+# `gogdl`/`nile` wywoływane przez `Command`) tu logika jest częścią samej
+# binarki hacker-mode — patrz moduł-dokumentacja w
+# `launchers-cli/ea-cli/src/lib.rs` i `launchers-cli/bnet/src/lib.rs` po
+# wyjaśnienie zakresu (i świadomych ograniczeń) tej integracji.
 
 [workspace.package]
-version = "1.0.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["HackerOS Team <hackeros068@gmail.com>"]
 license = "GPL-3.0"
