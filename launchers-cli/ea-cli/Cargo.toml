@@ -1,1 +1,15 @@
+[package]
+name = "ea-cli"
+version = "0.5.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Detekcja i uruchamianie EA app (EA Desktop) zainstalowanego pod Wine — biblioteka statycznie linkowana do binarki hacker-mode, NIE osobne narzędzie CLI wywoływane przez Command (w przeciwieństwie do legendary/gogdl/nile). Patrz komentarz na początku src/lib.rs po wyjaśnienie, dlaczego to NIE jest 'legendary, ale dla EA'."
 
+[dependencies]
+thiserror = "1"
+which = "6"
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
