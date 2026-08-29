@@ -8,9 +8,18 @@ const defaultSettings: Settings = {
   wrapper_mode_enabled: true,
   gaming_tools: { gamescope: false, mangohud: true, vkbasalt: false },
   power_profile: "balanced",
-  enabled_platforms: ["steam", "epic", "gog", "amazon", "lutris"],
+  enabled_platforms: ["steam", "epic", "gog", "amazon", "lutris", "ea", "battlenet"],
   steam_api_key: null,
   steam_id64: null,
+  steamgriddb_api_key: null,
+  game_tags: {},
+  cloud_saves_backup_dir: null,
+  game_save_paths: {},
+  game_controller_configs: {},
+  custom_launch_prefix: null,
+  notifications: { on_install: true, on_game_exit: true, on_backup_error: true },
+  ea_wine_prefix: null,
+  battlenet_wine_prefix: null,
 };
 
 const [settings, setSettings] = createSignal<Settings>(defaultSettings);
@@ -55,4 +64,11 @@ export const settingsStore = {
   lang,
   loaded,
   update,
+  /** Ponowne wczytanie ustawień z backendu — używane po komendach, które
+   * mutują `Settings` z pominięciem `update()`/`saveSettings` (np.
+   * `set_game_tags`, `set_game_cover`), żeby lokalny sygnał `settings()`
+   * dogonił to, co faktycznie leży na dysku, bez wysyłania całego obiektu
+   * ustawień z powrotem (co `update()` by zrobiło, ryzykując nadpisanie
+   * czegoś zmienionego w międzyczasie przez tamtą dedykowaną komendę). */
+  reload: load,
 };
