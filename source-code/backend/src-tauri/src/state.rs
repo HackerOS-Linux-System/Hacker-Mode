@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -13,6 +14,30 @@ pub struct AppState {
     /// Czy tryb "wrapper" (zamykanie Hacker Mode na czas działania
     /// zewnętrznej aplikacji, tak jak w wersji 0.1) jest aktualnie aktywny.
     pub wrapper_active: AtomicBool,
+    /// PID procesu aktualnie uruchomionej gry, per gra — klucz
+    /// `"<platform-slug>:<game-id>"` (ten sam format co
+    /// `cover_override_key`). Wypełniane w `launcher::launch_game` zaraz
+    /// po `spawn()`, usuwane w `run_wrapped`, gdy proces się zakończy.
+    ///
+    /// Używane przez `commands::stop_game` do znalezienia PID-u do
+    /// zabicia — i przez `commands::is_game_running` (odpytywane przez
+    /// frontend zaraz po starcie aplikacji, żeby od razu wiedzieć, czy
+    /// jakaś gra już działa, np. po odświeżeniu strony/przełączeniu
+    /// widoku, bez czekania na kolejne zdarzenie `game-launched`, które
+    /// wtedy by już nie nadeszło — zdarzenia Tauri nie mają historii,
+    /// nowy listener nie dostaje zdarzeń wyemitowanych PRZED jego
+    /// zarejestrowaniem).
+    ///
+    /// UWAGA (patrz `launcher.rs`/`commands::stop_game`): dla Steam ten
+    /// PID to proces polecenia `steam -applaunch <appid>`, NIE proces
+    /// samej gry — jeśli Steam już działał, ten proces kończy się niemal
+    /// natychmiast po przekazaniu żądania działającemu klientowi (Steam
+    /// używa IPC do komunikacji między instancjami), więc dla Steam ten
+    /// wpis w praktyce znika z mapy sekundy po starcie, mimo że gra
+    /// dalej działa. To ograniczenie samego mechanizmu Steam, nie błąd —
+    /// udokumentowane też w UI (`GameDetail.tsx`/`GameCard.tsx` nie
+    /// pokazują przycisku "Zatrzymaj" dla Steam z tego właśnie powodu).
+    pub running_games: Mutex<HashMap<String, u32>>,
 }
 
 impl AppState {
@@ -21,6 +46,7 @@ impl AppState {
             dev_mode: AtomicBool::new(dev_mode),
             settings: Mutex::new(Settings::load_or_default()),
             wrapper_active: AtomicBool::new(false),
+            running_games: Mutex::new(HashMap::new()),
         }
     }
 
