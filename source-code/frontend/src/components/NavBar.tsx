@@ -2,9 +2,9 @@ import { A, useLocation, useNavigate } from "@solidjs/router";
 import { Component, onMount } from "solid-js";
 import { settingsStore } from "@/stores/settingsStore";
 import { getText } from "@/i18n";
-import { IconHome, IconLibrary, IconStore, IconSettings, IconPower } from "@/components/Icons";
+import { IconHome, IconLibrary, IconStore, IconSettings, IconPower, IconStats } from "@/components/Icons";
 
-const ROUTES = ["/", "/library", "/store", "/settings"];
+const ROUTES = ["/", "/library", "/store", "/stats", "/settings"];
 
 const NavBar: Component<{ onOpenMenu: () => void }> = (props) => {
   const location = useLocation();
@@ -53,6 +53,10 @@ const NavBar: Component<{ onOpenMenu: () => void }> = (props) => {
       <A href="/store" class={`nav-btn ${isActive("/store") ? "active" : ""}`} data-focusable tabIndex={0}>
         <IconStore />
         {t("store")}
+      </A>
+      <A href="/stats" class={`nav-btn ${isActive("/stats") ? "active" : ""}`} data-focusable tabIndex={0}>
+        <IconStats />
+        {t("stats")}
       </A>
       <A href="/settings" class={`nav-btn ${isActive("/settings") ? "active" : ""}`} data-focusable tabIndex={0}>
         <IconSettings />
