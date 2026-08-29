@@ -116,18 +116,42 @@ impl StoreProvider for AmazonProvider {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: Vec<NileInstalledGame> = serde_json::from_str(&stdout)
+
+        // Trzymamy też surowe wartości JSON obok typowanych `NileInstalledGame`
+        // (patrz `find_cover_art` niżej) — w przeciwieństwie do Epic/GOG,
+        // `nile` nie ma udokumentowanego, stabilnego formatu cache'u
+        // metadanych ani publicznego API katalogowego, którego dałoby się
+        // tu wprost odpytać. Zamiast zgadywać nieistniejący endpoint,
+        // przepuszczamy KAŻDY wpis z `nile library list ... --json`
+        // przez tę samą heurystykę co GOG (`cover_cache::find_image_url`)
+        // — jeśli `nile` kiedykolwiek zacznie zwracać pole z URL-em
+        // okładki (np. `productImage`/`thumbnail`), zostanie ono
+        // automatycznie wykryte i pobrane, bez konieczności zmiany kodu
+        // pod konkretną nazwę pola.
+        let raw_entries: Vec<serde_json::Value> = serde_json::from_str(&stdout)
             .map_err(|e| StoreError::ParseError("nile library list".into(), e.to_string()))?;
+
+        let parsed: Vec<NileInstalledGame> = raw_entries
+            .iter()
+            .cloned()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .map_err(|e: serde_json::Error| StoreError::ParseError("nile library list".into(), e.to_string()))?;
+
+        let ids: Vec<String> = parsed.iter().map(|e| e.id.clone()).collect();
+        let cover_urls: Vec<Option<String>> = raw_entries.iter().map(crate::cover_cache::find_image_url).collect();
+        let covers = fetch_covers_in_parallel(&ids, &cover_urls);
 
         let games = parsed
             .into_iter()
-            .map(|entry| Game {
+            .zip(covers)
+            .map(|(entry, cover_path)| Game {
                 title: entry.product_title.clone().unwrap_or_else(|| format!("Gra Amazon #{}", entry.id)),
                 id: entry.id,
                 platform: Platform::Amazon,
                 installed: true,
                 install_dir: entry.path,
-                cover_path: None,
+                cover_path,
                 playtime_minutes: None,
             })
             .collect();
@@ -152,4 +176,108 @@ impl StoreProvider for AmazonProvider {
         cmd.args(["launch", game_id]);
         Ok(cmd)
     }
+}
+
+/// Pobiera (o ile `url` nie jest `None` — patrz wywołanie w `list_games`)
+/// okładkę spod `url` i zapisuje ją w lokalnym cache Hacker Mode.
+/// Przyjmuje współdzielony `client`, żeby dało się to wywoływać
+/// równolegle — patrz `fetch_covers_in_parallel`.
+fn find_cover_art(id: &str, url: Option<&str>, client: &reqwest::blocking::Client) -> Option<String> {
+    let url = url?;
+    // Tak jak w GOG, adresy bywają zapisane bez schematu (`//cdn.../x.jpg`).
+    let url = if let Some(stripped) = url.strip_prefix("//") {
+        format!("https://{stripped}")
+    } else {
+        url.to_string()
+    };
+    crate::cover_cache::cache_image(&url, &format!("amazon-{id}"), client)
+}
+
+/// Pobiera okładki dla wielu gier Amazon naraz na ograniczonej puli
+/// wątków — patrz `gog.rs::fetch_covers_in_parallel` po pełny opis
+/// strategii. Różnica względem GOG/Epic: tu URL okładki (jeśli w ogóle
+/// istnieje) jest już znany z góry (wyciągnięty heurystycznie z surowego
+/// JSON-a `nile`, patrz `list_games`), więc wątki tylko pobierają i
+/// cache'ują obraz, bez dodatkowego zapytania sieciowego po metadane.
+fn fetch_covers_in_parallel(ids: &[String], cover_urls: &[Option<String>]) -> Vec<Option<String>> {
+    const MAX_PARALLEL_COVER_FETCHES: usize = 8;
+
+    let mut covers: Vec<Option<String>> = vec![None; ids.len()];
+    if ids.is_empty() || cover_urls.iter().all(Option::is_none) {
+        // Żaden wpis nie ma URL-a okładki (typowy dziś przypadek dla
+        // Amazon, patrz komentarz w `list_games`) — nie ma sensu nawet
+        // budować klienta HTTP ani odpalać wątków.
+        return covers;
+    }
+
+    let Some(client) = crate::cover_cache::build_client() else {
+        return covers;
+    };
+
+    let worker_count = MAX_PARALLEL_COVER_FETCHES.min(ids.len());
+    let chunk_size = (ids.len() + worker_count - 1) / worker_count;
+
+    std::thread::scope(|scope| {
+        let id_chunks = ids.chunks(chunk_size);
+        let url_chunks = cover_urls.chunks(chunk_size);
+        let cover_chunks = covers.chunks_mut(chunk_size);
+        for ((ids_chunk, urls_chunk), covers_chunk) in id_chunks.zip(url_chunks).zip(cover_chunks) {
+            let client = &client;
+            scope.spawn(move || {
+                for ((id, url), slot) in ids_chunk.iter().zip(urls_chunk.iter()).zip(covers_chunk.iter_mut()) {
+                    *slot = find_cover_art(id, url.as_deref(), client);
+                }
+            });
+        }
+    });
+
+    covers
+}
+
+/// Odpowiednik `steam::fetch_owned_games` dla Amazon: pełna biblioteka
+/// POSIADANYCH gier na koncie (nie tylko zainstalowanych) — różnica
+/// względem `list_games` to tylko brak flagi `--installed` w wywołaniu
+/// `nile`, którą społeczność `nile`/Heroic dokumentuje jako pokazującą
+/// pełną bibliotekę Amazon Games/Prime Gaming, gdy się ją pominie
+/// (`nile library list` bez żadnych flag). Ciche błędy — patrz
+/// `epic::fetch_owned_games`, ten sam powód.
+pub fn fetch_owned_games(_installed_ids: &std::collections::HashSet<String>) -> Vec<super::OwnedGame> {
+    let output = Command::new("nile")
+        .args(["library", "list", "--json"])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let raw_entries: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::debug!(%err, "Amazon: nie udało się sparsować `nile library list --json`");
+            return Vec::new();
+        }
+    };
+
+    let parsed: Vec<NileInstalledGame> = raw_entries
+        .iter()
+        .cloned()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect();
+
+    let ids: Vec<String> = parsed.iter().map(|e| e.id.clone()).collect();
+    let cover_urls: Vec<Option<String>> = raw_entries.iter().map(crate::cover_cache::find_image_url).collect();
+    let covers = fetch_covers_in_parallel(&ids, &cover_urls);
+
+    parsed
+        .into_iter()
+        .zip(covers)
+        .map(|(entry, cover_path)| super::OwnedGame {
+            title: entry.product_title.clone().unwrap_or_else(|| format!("Gra Amazon #{}", entry.id)),
+            id: entry.id,
+            cover_path,
+        })
+        .collect()
 }
