@@ -37,12 +37,50 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+          # BUGFIX (zgłoszony przez prawdziwy przebieg workflow —
+          # `logs_90262718923.zip`): wbudowany cache `setup-node`
+          # (`cache: npm` + `cache-dependency-path`) TWARDO failuje całym
+          # krokiem („Some specified paths were not resolved, unable to
+          # cache dependencies”), jeśli podana ścieżka nie da się
+          # rozwiązać do ŻADNEGO pliku — co ubiło cały job (i przez
+          # `needs: frontend` też job `backend`, który przez to nawet się
+          # nie zaczął), zanim `npm install`/testy/build w ogóle
+          # ruszyły. Zamiast polegać na tym wbudowanym mechanizmie
+          # (kruchym akurat na brak/niespójną ścieżkę `package-lock.json`
+          # w repo), cache'owanie robimy osobnym, odpornym krokiem niżej
+          # (`actions/cache`, który przy braku pliku po prostu nie
+          # trafia w cache, zamiast przerywać workflow błędem).
 
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          # `hashFiles` na NIEISTNIEJĄCY plik zwraca pusty string (nie
+          # błąd) — klucz wtedy po prostu nie zawiera tego segmentu,
+          # cache się nie trafi (zamiast crashować cały krok, jak robił
+          # to wbudowany mechanizm `setup-node` wyżej).
+          key: npm-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', env.FRONTEND_DIR)) }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      # `npm ci` wymaga OBECNOŚCI i pełnej spójności `package-lock.json`
+      # (inaczej sam odmawia startu) — skoro nie mamy pewności, czy ten
+      # plik jest zacommitowany w repo (patrz bugfix wyżej), robimy to
+      # odpornie: `npm ci`, gdy lockfile jest; w przeciwnym razie zwykłe
+      # `npm install` (samo sobie ustali/zapisze wersje). Warto mimo to
+      # ZACOMMITOWAĆ `source-code/frontend/package-lock.json` w repo,
+      # jeśli go tam jeszcze nie ma — to jedyny sposób na w pełni
+      # reprodukowalne wersje zależności frontendu między przebiegami.
       - name: npm install
         working-directory: ${{ env.FRONTEND_DIR }}
-        run: npm ci
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "Znaleziono package-lock.json — npm ci"
+            npm ci
+          else
+            echo "::warning::Brak package-lock.json w ${{ env.FRONTEND_DIR }} — używam npm install zamiast npm ci (mniej reprodukowalne; warto zacommitować lockfile)."
+            npm install
+          fi
 
       # Odpowiednik `make check` (część frontendowa: `npm run check`) —
       # `tsc --noEmit`, bez emitowania plików, tylko sprawdzenie typów.
