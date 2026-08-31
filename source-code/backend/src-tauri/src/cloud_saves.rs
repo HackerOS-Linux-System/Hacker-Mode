@@ -142,6 +142,7 @@ pub fn restore_backup(backup_root: &Path, platform_slug: &str, game_id: &str, ba
     }
 
     let save_path_buf = Path::new(save_path);
+    let parent = save_path_buf.parent().ok_or("Nieprawidłowa ścieżka zapisu")?;
     // Kopia bezpieczeństwa AKTUALNEGO stanu przed nadpisaniem — patrz
     // dokumentacja funkcji. Błąd tworzenia tej kopii NIE blokuje
     // przywracania (użytkownik świadomie klika "Przywróć", wie, co robi),
@@ -152,20 +153,28 @@ pub fn restore_backup(backup_root: &Path, platform_slug: &str, game_id: &str, ba
         }
     }
 
-    std::fs::create_dir_all(save_path_buf).map_err(|e| format!("Nie udało się przygotować katalogu docelowego: {e}"))?;
-    let parent = save_path_buf.parent().ok_or("Nieprawidłowa ścieżka zapisu")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("Nie udało się przygotować katalogu docelowego: {e}"))?;
 
-    // `--strip-components=1` odwraca `-C parent dir_name` z `backup_now`:
-    // archiwum ma w środku jeden katalog najwyższego poziomu (nazwę
-    // zapisu w momencie tworzenia kopii), a chcemy rozpakować jego
-    // ZAWARTOŚĆ wprost do `save_path`, nie stworzyć zagnieżdżony katalog
-    // o tej samej nazwie jeszcze raz w środku.
+    // BUGFIX (zgłoszone przez `cargo test` w CI — `logs_Hacker-Mode.zip`,
+    // test `backup_and_restore_roundtrip`): wcześniejsza wersja łączyła
+    // `-C parent` z `--strip-components=1`, co wypakowywało pliki o JEDEN
+    // POZIOM ZA WYSOKO. Archiwum ma w środku jeden katalog najwyższego
+    // poziomu o nazwie DOKŁADNIE takiej jak `save_path` (patrz
+    // `backup_now`: `tar -C parent dir_name`, gdzie `dir_name` to nazwa
+    // katalogu zapisu) — więc rozpakowanie go z `-C parent` BEZ ścinania
+    // komponentów samo z siebie odtwarza `parent/<dir_name>/...`, czyli
+    // dokładnie `save_path`. Poprzednia wersja dodatkowo ŚCINAŁA ten sam
+    // komponent, co w połączeniu z `-C parent` (zamiast `-C save_path`)
+    // wypakowywało zawartość PROSTO DO `parent`, pomijając katalog
+    // `save_path` w ogóle — plik, którego test szukał pod
+    // `save_path/slot1.sav`, faktycznie lądował pod `parent/slot1.sav`.
+    // Nie potrzeba już osobnego `create_dir_all(save_path)` — `tar`
+    // odtworzy ten katalog sam, z samej struktury archiwum.
     let status = Command::new("tar")
         .arg("-xzf")
         .arg(&backup_path)
         .arg("-C")
         .arg(parent)
-        .arg("--strip-components=1")
         .status()
         .map_err(|e| format!("Nie udało się uruchomić `tar`: {e}"))?;
     if !status.success() {
