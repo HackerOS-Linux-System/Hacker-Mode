@@ -423,13 +423,29 @@ fn parse_store_details(parsed: &serde_json::Value) -> Option<super::GameDetails>
 /// nietypowe znaczniki (np. `<script>`, którego GOG i tak nie zwraca w tym
 /// polu) zostałyby po prostu usunięte razem z zawartością tagu, nigdy
 /// wykonane.
+///
+/// BUGFIX (zgłoszone przez `cargo test` w CI — `logs_Hacker-Mode.zip`):
+/// wcześniejsza wersja po prostu POMIJAŁA znaki wewnątrz `<...>`, bez
+/// wstawienia w ich miejsce spacji — dla tagów typu `<br>`/`<p>`, które w
+/// HTML same w sobie PEŁNIĄ rolę separatora (nawet bez otaczających
+/// spacji w źródle, jak `"Linia<br>druga"`), dawało to sklejony tekst
+/// (`"Liniadruga"`) zamiast oddzielonego (`"Linia druga"`). Naprawione
+/// przez wstawienie spacji przy KAŻDYM zamknięciu tagu — ewentualne
+/// nadmiarowe/podwójne spacje (np. gdy w źródle i tak była spacja tuż
+/// obok tagu) są i tak sprzątane przez `split_whitespace().join(" ")`
+/// niżej, więc to bezpieczne uproszczenie: lepiej wstawić spację zawsze i
+/// pozwolić normalizacji ją ewentualnie scalić, niż zgadywać, które tagi
+/// "na pewno" nie potrzebują separatora.
 fn strip_html_tags(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut inside_tag = false;
     for ch in input.chars() {
         match ch {
             '<' => inside_tag = true,
-            '>' => inside_tag = false,
+            '>' => {
+                inside_tag = false;
+                output.push(' ');
+            }
             _ if !inside_tag => output.push(ch),
             _ => {}
         }
