@@ -154,10 +154,21 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      # Odpowiednik `make check` (część `cargo check --workspace`) —
-      # szybsza niż pełny build, więc łapie większość błędów wcześniej.
+      # `--locked` NIE jest tu używane — `Cargo.lock` w repo bywa
+      # nieaktualny względem `Cargo.toml` (patrz CHANGELOG: generowany w
+      # środowisku ze starym `rustc` 1.75, który nie potrafi w pełni
+      # rozwiązać współczesnego drzewa zależności — np. `mail-parser`
+      # przez `ribbit-client` wymaga dziś `edition2024`). Próba `--locked`
+      # kończyła się tu za każdym razem błędem „cannot create the lock
+      # file … because --locked was passed to prevent this”, zanim i tak
+      # trzeba było spaść do zwykłego `cargo check` bez tej flagi (patrz
+      # `logs_Hacker-Mode.zip`) — usunięte, żeby nie generować mylącego
+      # błędu w logu za KAŻDYM przebiegiem workflow na nowoczesnym
+      # `cargo` (który i tak sobie z tym radzi, po prostu aktualizując
+      # lock w locie, dokładnie tak jak poniższe `cargo test`/`cargo
+      # build` już robią bez `--locked`).
       - name: cargo check --workspace
-        run: cargo check --workspace --locked || cargo check --workspace
+        run: cargo check --workspace
 
       # Odpowiednik `make test`. Dwa osobne wywołania (nie jedno
       # `cargo test --workspace`) — tak samo jak `Makefile`, żeby log
