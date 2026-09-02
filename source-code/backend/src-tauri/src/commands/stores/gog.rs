@@ -1,5 +1,6 @@
 use super::{tool_available, Game, LoginFlow, Platform, StoreError, StoreProvider};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -8,13 +9,122 @@ pub struct GogProvider;
 
 const GOG_LOGIN_URL: &str = "https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient&response_type=code&layout=client2";
 
-#[derive(Debug, Deserialize)]
-struct GogdlInstalledGame {
-    id: String,
-    title: Option<String>,
-    install_path: Option<String>,
-    #[serde(default)]
-    dlcs: Vec<serde_json::Value>,
+/// BUGFIX (patrz README „Do zrobienia dalej” i moduł-dokumentacja
+/// `installed_manifest_path` niżej): `gogdl` NIE MA podkomendy
+/// `list-installed` — kod tu wcześniej ją wywoływał, więc `list_games`
+/// zawsze kończył się błędem i zainstalowane gry GOG nigdy się poprawnie
+/// nie pokazywały (a przez to biblioteka wyglądała, jakby po zalogowaniu
+/// "nie było tam wszystkich gier"). Potwierdzone realnym komunikatem
+/// błędu `argparse` z terminala użytkownika Heroic (który używa
+/// DOKŁADNIE tego samego `gogdl`):
+/// `usage: gogdl [-h] [--version] --auth-config-path AUTH_CONFIG_PATH
+/// {import,redist,dependencies,auth,download,repair,update,info,launch,save-sync,save-clear} ...`
+/// — bez „list”/„list-installed” w ogóle. Z tego samego powodu
+/// `uninstall_command` niżej też było zepsute (`uninstall` też nie
+/// istnieje w tej liście) — patrz jego dokumentacja.
+///
+/// Heroic Games Launcher (który używa dokładnie tego samego `gogdl`) ma
+/// dokładnie ten sam problem do rozwiązania i rozwiązuje go tak samo:
+/// NIE pyta `gogdl` o listę zainstalowanych gier, tylko sam ją śledzi we
+/// własnym magazynie (patrz DeepWiki: `createMissingGogdlManifest`
+/// "scans installed games and recreates missing .json manifests"). Ten
+/// plik (`GogProvider::config_dir()/installed.json`) to nasz
+/// odpowiednik — zapisywany/czytany WYŁĄCZNIE przez Hacker Mode, nigdy
+/// przez `gogdl` bezpośrednio.
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct GogInstalledManifest(HashMap<String, GogInstalledEntry>);
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct GogInstalledEntry {
+    title: String,
+    install_path: String,
+}
+
+fn installed_manifest_path() -> PathBuf {
+    GogProvider::config_dir().join("installed.json")
+}
+
+fn read_installed_manifest() -> GogInstalledManifest {
+    std::fs::read_to_string(installed_manifest_path())
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
+}
+
+fn write_installed_manifest(manifest: &GogInstalledManifest) {
+    let dir = GogProvider::config_dir();
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(%err, "GOG: nie udało się utworzyć katalogu na manifest zainstalowanych gier");
+        return;
+    }
+    match serde_json::to_string_pretty(manifest) {
+        Ok(json) => {
+            if let Err(err) = std::fs::write(installed_manifest_path(), json) {
+                tracing::warn!(%err, "GOG: nie udało się zapisać manifestu zainstalowanych gier");
+            }
+        }
+        Err(err) => tracing::warn!(%err, "GOG: nie udało się zserializować manifestu zainstalowanych gier"),
+    }
+}
+
+/// Katalog, w którym Hacker Mode instaluje gry GOG, jeśli użytkownik nie
+/// wybrał własnego — jeden podkatalog na grę, nazwany jej ID produktu
+/// GOG (`<root>/<id>`), żeby dało się deterministycznie odzyskać ścieżkę
+/// instalacji z samego ID, bez pytania `gogdl` o nic (czego i tak nie
+/// umie, patrz wyżej).
+fn default_install_root() -> PathBuf {
+    dirs::home_dir().unwrap_or_default().join("Games/HackerMode-GOG")
+}
+
+/// Wywoływane PO potwierdzonym sukcesie `gogdl download` (patrz
+/// `launcher::install_game`/`stores::on_install_finished`) — dopisuje
+/// wpis do manifestu, żeby `list_games`/`launch_command` wiedziały o tej
+/// grze. Tytuł dociągamy z publicznego `api.gog.com/products/<id>` (ten
+/// sam endpoint co `find_cover_art`) — `gogdl download` sam w sobie
+/// niczego takiego nie zwraca w łatwym do sparsowania miejscu.
+///
+/// Świadomie NIE sprawdzamy tu dokładnej zawartości katalogu docelowego
+/// (czy `gogdl` zrzucił pliki bezpośrednio do `install_dir`, czy może
+/// utworzył w środku dodatkowy podkatalog nazwany tytułem gry — to
+/// zachowanie nie zostało jednoznacznie potwierdzone, patrz
+/// `install_command`) — w OBU przypadkach `install_dir` samo w sobie
+/// jest poprawną ścieżką do przekazania `gogdl launch` (który akceptuje
+/// katalog gry, nie plik wykonywalny), więc manifest zawsze zapisuje TĘ
+/// ścieżkę.
+pub fn record_installed(game_id: &str) {
+    let install_dir = default_install_root().join(game_id);
+    if !install_dir.exists() {
+        tracing::warn!(
+            game_id,
+            path = %install_dir.display(),
+            "GOG: katalog instalacji nie istnieje po zakończeniu `gogdl download` — pomijam wpis w manifeście"
+        );
+        return;
+    }
+
+    let title = crate::cover_cache::build_client()
+        .and_then(|client| fetch_owned_game_details_uncached(game_id, &client))
+        .map(|g| g.title)
+        .unwrap_or_else(|| format!("Gra GOG #{game_id}"));
+
+    let mut manifest = read_installed_manifest();
+    manifest.0.insert(
+        game_id.to_string(),
+        GogInstalledEntry { title, install_path: install_dir.display().to_string() },
+    );
+    write_installed_manifest(&manifest);
+}
+
+/// Odpowiednik `record_installed`, wywoływane po potwierdzonym sukcesie
+/// odinstalowania — patrz `uninstall_command` (samo usunięcie katalogu z
+/// dysku robi zwrócona stamtąd komenda `rm -rf`, ta funkcja tylko czyści
+/// wpis z manifestu, żeby gra nie została "zainstalowana" na liście na
+/// zawsze).
+pub fn forget_installed(game_id: &str) {
+    let mut manifest = read_installed_manifest();
+    if manifest.0.remove(game_id).is_some() {
+        write_installed_manifest(&manifest);
+    }
 }
 
 /// Kształt pliku, w którym `gogdl auth` zapisuje token dostępu — patrz
@@ -42,6 +152,7 @@ impl GogProvider {
 
 impl StoreProvider for GogProvider {
     fn platform(&self) -> Platform {
+
         Platform::Gog
     }
 
@@ -82,40 +193,24 @@ impl StoreProvider for GogProvider {
     }
 
     fn list_games(&self) -> Result<Vec<Game>, StoreError> {
-        let output = Command::new("gogdl")
-            .args(["--auth-config-path"])
-            .arg(Self::config_dir())
-            .args(["list-installed"])
-            .output()
-            .map_err(|e| StoreError::ExecFailed("gogdl".into(), e.to_string()))?;
-
-        if !output.status.success() {
-            return Err(StoreError::NotLoggedIn("GOG".into()));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: Vec<GogdlInstalledGame> = serde_json::from_str(&stdout)
-            .map_err(|e| StoreError::ParseError("gogdl list-installed".into(), e.to_string()))?;
-
-        // Okładki pobieramy z `api.gog.com` (sieciowo) dla każdej gry z
-        // osobna — przy sporej bibliotece i pustym lokalnym cache
-        // (`cover_cache`) robienie tego po kolei potrafi zauważalnie
-        // spowolnić `list_games`. Rozdzielamy więc pobieranie na kilka
-        // wątków naraz (patrz `fetch_covers_in_parallel`), zamiast
-        // odpytywać API okładka po okładce.
-        let ids: Vec<String> = parsed.iter().map(|e| e.id.clone()).collect();
+        // Patrz moduł-dokumentacja `GogInstalledManifest`: `gogdl` nie ma
+        // ŻADNEJ podkomendy do wylistowania zainstalowanych gier, więc
+        // czytamy WŁASNY manifest Hacker Mode zamiast go pytać.
+        let manifest = read_installed_manifest();
+        let entries: Vec<(String, GogInstalledEntry)> = manifest.0.into_iter().collect();
+        let ids: Vec<String> = entries.iter().map(|(id, _)| id.clone()).collect();
         let covers = fetch_covers_in_parallel(&ids);
 
-        let games = parsed
+        let games = entries
             .into_iter()
             .zip(covers)
-            .map(|(entry, cover_path)| Game {
-                title: entry.title.clone().unwrap_or_else(|| format!("Gra GOG #{}", entry.id)),
-                cover_path,
-                id: entry.id,
+            .map(|((id, entry), cover_path)| Game {
+                title: entry.title,
+                id,
                 platform: Platform::Gog,
                 installed: true,
-                install_dir: entry.install_path,
+                install_dir: Some(entry.install_path),
+                cover_path,
                 playtime_minutes: None,
             })
             .collect();
@@ -124,26 +219,84 @@ impl StoreProvider for GogProvider {
     }
 
     fn install_command(&self, game_id: &str) -> Result<Command, StoreError> {
+        // BUGFIX (patrz moduł-dokumentacja `GogInstalledManifest`): brakowało
+        // TU wcześniej `--platform`/`--path`/`--lang` — bez `--path` `gogdl`
+        // nie wie, gdzie zainstalować grę (potwierdzony realny przykład
+        // wywołania z loga Heroic: `download <id> --platform linux
+        // --path=<katalog> --skip-dlcs --lang=en`). To
+        // najbardziej prawdopodobny powód, dla którego w praktyce działała
+        // TYLKO instalacja przez `legendary` (Epic) — jego komenda
+        // (`legendary install <id> -y`) była kompletna od początku, a ta
+        // dla GOG nie.
+        //
+        // `--skip-dlcs`: bez tej flagi `gogdl` może próbować interaktywnie
+        // zapytać o wybór DLC do zainstalowania — proces uruchomiony przez
+        // `launcher::install_game` nie ma żadnego stdin do odpowiedzi, więc
+        // taki prompt zawiesiłby instalację w nieskończoność zamiast się
+        // zakończyć błędem. Użytkownik zawsze może doinstalować DLC osobno
+        // później (nie jest to jeszcze obsługiwane w UI Hacker Mode — patrz
+        // README, „Do zrobienia dalej”).
+        let install_dir = default_install_root().join(game_id);
         let mut cmd = Command::new("gogdl");
         cmd.args(["--auth-config-path"])
             .arg(Self::config_dir())
-            .args(["download", game_id]);
+            .args(["download", game_id, "--platform", "linux"])
+            .arg(format!("--path={}", install_dir.display()))
+            .args(["--lang=en", "--skip-dlcs"]);
         Ok(cmd)
     }
 
     fn uninstall_command(&self, game_id: &str) -> Result<Command, StoreError> {
-        let mut cmd = Command::new("gogdl");
-        cmd.args(["--auth-config-path"])
-            .arg(Self::config_dir())
-            .args(["uninstall", game_id]);
+        // BUGFIX (patrz moduł-dokumentacja `GogInstalledManifest`): `gogdl`
+        // NIE MA podkomendy `uninstall` (potwierdzony realny `usage:` —
+        // patrz tam) — wcześniejszy kod wołał ją i zawsze kończył się
+        // błędem, więc "Odinstaluj" dla gier GOG nigdy nie działało. Heroic
+        // radzi sobie z tym samym ograniczeniem tak samo: samo usuwa
+        // katalog instalacji z dysku, bez pytania `gogdl` o nic. Manifest
+        // (patrz `forget_installed`) jest czyszczony PO potwierdzonym
+        // sukcesie tej komendy, w `launcher::uninstall_game` przez
+        // `stores::on_uninstall_finished` — nie tutaj, bo ta funkcja tylko
+        // BUDUJE komendę, jeszcze jej nie uruchamia.
+        let manifest = read_installed_manifest();
+        let install_path = manifest
+            .0
+            .get(game_id)
+            .map(|e| e.install_path.clone())
+            .unwrap_or_else(|| default_install_root().join(game_id).display().to_string());
+
+        let mut cmd = Command::new("rm");
+        cmd.args(["-rf", "--"]).arg(install_path);
         Ok(cmd)
     }
 
     fn launch_command(&self, game_id: &str) -> Result<Command, StoreError> {
+        // BUGFIX (patrz moduł-dokumentacja `GogInstalledManifest`): `gogdl
+        // launch` oczekuje ścieżki instalacji jako PIERWSZEGO argumentu
+        // pozycyjnego, PRZED ID gry, plus `--platform` — potwierdzony
+        // realny przykład wywołania z loga Heroic:
+        // `gogdl launch "<ścieżka instalacji>" <id> --platform linux`.
+        // Wcześniejszy kod wołał `gogdl launch <id>` — bez ścieżki i bez
+        // `--platform`, więc uruchamianie zainstalowanych gier GOG też nie
+        // działało (niezależnie od problemu z samą instalacją wyżej).
+        let manifest = read_installed_manifest();
+        let install_path = manifest
+            .0
+            .get(game_id)
+            .map(|e| e.install_path.clone())
+            .ok_or_else(|| {
+                StoreError::ExecFailed(
+                    "gogdl launch".into(),
+                    "Nie znaleziono zainstalowanej gry w manifeście Hacker Mode — spróbuj zainstalować ją ponownie".into(),
+                )
+            })?;
+
         let mut cmd = Command::new("gogdl");
         cmd.args(["--auth-config-path"])
             .arg(Self::config_dir())
-            .args(["launch", game_id]);
+            .arg("launch")
+            .arg(install_path)
+            .arg(game_id)
+            .args(["--platform", "linux"]);
         Ok(cmd)
     }
 }
@@ -536,6 +689,138 @@ fn parse_search_results(parsed: &serde_json::Value) -> Vec<StoreSearchResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `GogProvider::config_dir()`/`installed_manifest_path()` czytają
+    /// katalog konfiguracji z `dirs::config_dir()`, który na Linuksie
+    /// respektuje `XDG_CONFIG_HOME` — testy niżej, które muszą
+    /// kontrolować gdzie manifest jest odczytywany/zapisywany, nadpisują
+    /// tę zmienną środowiskową. Ponieważ zmienne środowiskowe są
+    /// dzielone przez cały proces (a testy Rust domyślnie działają
+    /// równolegle w wielu wątkach TEGO SAMEGO procesu), wszystkie takie
+    /// testy muszą się o ten sam `Mutex` bić o dostęp, żeby nie ustawiały
+    /// sobie nawzajem innej wartości w trakcie działania - stąd `ENV_LOCK`.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn install_command_includes_required_gogdl_arguments() {
+        // BUGFIX regression test — patrz moduł-dokumentacja
+        // `GogInstalledManifest`: te argumenty (`--platform`, `--path`,
+        // `--skip-dlcs`) BRAKOWAŁY wcześniej całkowicie, więc `gogdl
+        // download` zawsze się wywalał albo wisiał czekając na
+        // interaktywny input.
+        let cmd = GogProvider.install_command("1207658691").unwrap();
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+
+        assert!(args.contains(&"download".to_string()));
+        assert!(args.contains(&"1207658691".to_string()));
+        assert!(args.contains(&"--platform".to_string()));
+        assert!(args.contains(&"linux".to_string()));
+        assert!(args.iter().any(|a| a.starts_with("--path=")));
+        assert!(args.contains(&"--skip-dlcs".to_string()));
+    }
+
+    #[test]
+    fn installed_manifest_round_trips_through_json() {
+        let mut manifest = GogInstalledManifest::default();
+        manifest.0.insert(
+            "1207658691".to_string(),
+            GogInstalledEntry { title: "Wiedźmin 3".to_string(), install_path: "/tmp/gra".to_string() },
+        );
+        let json = serde_json::to_string(&manifest).unwrap();
+        let parsed: GogInstalledManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.0.get("1207658691").unwrap().title, "Wiedźmin 3");
+    }
+
+    #[test]
+    fn launch_command_fails_clearly_when_game_not_in_manifest() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+
+        let result = GogProvider.launch_command("nieznane-id");
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn launch_command_uses_recorded_install_path_from_manifest() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+
+        let mut manifest = GogInstalledManifest::default();
+        manifest.0.insert(
+            "42".to_string(),
+            GogInstalledEntry { title: "Testowa gra".to_string(), install_path: "/gry/testowa".to_string() },
+        );
+        write_installed_manifest(&manifest);
+
+        let cmd = GogProvider.launch_command("42");
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let cmd = cmd.unwrap();
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        // Kolejność jest istotna — patrz moduł-dokumentacja
+        // `launch_command`: ścieżka instalacji MUSI iść PRZED ID gry.
+        let path_pos = args.iter().position(|a| a == "/gry/testowa").unwrap();
+        let id_pos = args.iter().position(|a| a == "42").unwrap();
+        assert!(path_pos < id_pos, "ścieżka instalacji musi poprzedzać ID gry w argumentach `gogdl launch`");
+        assert!(args.contains(&"--platform".to_string()));
+    }
+
+    #[test]
+    fn uninstall_command_targets_recorded_install_path() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+
+        let mut manifest = GogInstalledManifest::default();
+        manifest.0.insert(
+            "42".to_string(),
+            GogInstalledEntry { title: "Testowa gra".to_string(), install_path: "/gry/testowa".to_string() },
+        );
+        write_installed_manifest(&manifest);
+
+        let cmd = GogProvider.uninstall_command("42");
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let cmd = cmd.unwrap();
+        assert_eq!(cmd.get_program().to_string_lossy(), "rm");
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.contains(&"/gry/testowa".to_string()));
+    }
+
+    #[test]
+    fn record_and_forget_installed_round_trip_manifest() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        // `record_installed` sprawdza istnienie katalogu instalacji pod
+        // `default_install_root()`, która czyta `$HOME` (przez
+        // `dirs::home_dir()`) — inną zmienną niż `XDG_CONFIG_HOME`
+        // (którą czyta `dirs::config_dir()`, używane przez
+        // `installed_manifest_path()`) — nadpisujemy więc OBIE, żeby
+        // test niczego nie dotknął poza `dir`.
+        std::env::set_var("HOME", dir.path());
+
+        // `record_installed` sprawdza, czy katalog instalacji istnieje
+        // na dysku PRZED zapisaniem wpisu (patrz jej dokumentacja) —
+        // tworzymy go więc tutaj, tak jak zrobiłby to `gogdl download`.
+        let install_dir = default_install_root().join("77");
+        std::fs::create_dir_all(&install_dir).unwrap();
+
+        record_installed("77");
+        let manifest = read_installed_manifest();
+        assert!(manifest.0.contains_key("77"));
+
+        forget_installed("77");
+        let manifest = read_installed_manifest();
+        assert!(!manifest.0.contains_key("77"));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("HOME");
+    }
 
     #[test]
     fn parses_owned_ids_as_strings() {
