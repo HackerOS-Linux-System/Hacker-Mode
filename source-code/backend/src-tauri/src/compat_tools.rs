@@ -58,6 +58,55 @@ fn backup_before_write(path: &std::path::Path) {
     prune_old_backups(path);
 }
 
+/// Zapisuje `new_content` do `path`, ale TYLKO jeśli plik na dysku wciąż
+/// ma DOKŁADNIE taką zawartość jak `expected_content` (ta, na podstawie
+/// której `new_content` zostało wyliczone) — prosta, best-effort
+/// optymistyczna kontrola współbieżności (compare-and-swap na poziomie
+/// pliku), patrz README „Do zrobienia dalej” → „Bezpieczeństwo zapisu
+/// plików”.
+///
+/// WAŻNE ograniczenie: to NIE jest prawdziwa blokada międzyprocesowa.
+/// Hacker Mode i tak nie może wymusić, żeby Steam/Lutris respektowały
+/// jakikolwiek zamek, którego same nie sprawdzają — te procesy piszą do
+/// tych plików bez pytania nikogo o pozwolenie. Ta funkcja łapie
+/// KONKRETNY, realny scenariusz wyścigu: Steam/Lutris zapisały plik
+/// MIĘDZY naszym odczytem (`content` przekazane wcześniej do
+/// `set_steam_compat_tool`/`set_lutris_wine_version`) a naszym zapisem —
+/// bez tej kontroli nasz zapis by go po cichu nadpisał, GUBIĄC to, co
+/// właśnie zapisał Steam/Lutris (np. świeżo zaktualizowany stan
+/// `LastPlayed`/inne pola w tym samym pliku). Z tą kontrolą — odmawiamy
+/// zapisu i zwracamy błąd instruujący wywołującego, żeby spróbował
+/// ponownie (świeży odczyt + patch + zapis na aktualnej zawartości).
+///
+/// Nie eliminuje to okna między TYM odczytem-weryfikującym a właściwym
+/// zapisem (wciąż mikroskopijne, ale niezerowe) — to fundamentalne
+/// ograniczenie zapisu plików bez wsparcia systemu plików dla
+/// prawdziwych blokad (`flock` też by nie pomógł, bo Steam/Lutris go nie
+/// sprawdzają), ale zawęża okno wyścigu z „cały czas między odczytem
+/// przez UI a kliknięciem zapisu przez użytkownika” (może być sekundy
+/// czy minuty) do „czas jednego dodatkowego odczytu pliku” (mikrosekundy).
+fn write_if_unchanged(path: &std::path::Path, expected_content: &str, new_content: &str) -> Result<(), String> {
+    let current = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        // Plik nie istniał jeszcze przy pierwszym odczycie (patrz
+        // `set_lutris_wine_version`, gdzie brak pliku jest traktowany
+        // jako pusta zawartość przez `unwrap_or_default()`) — jeśli
+        // WCIĄŻ go nie ma, to zgadza się z tym, co odczytaliśmy
+        // wcześniej, więc tworzymy go teraz. Każdy INNY błąd odczytu
+        // (uprawnienia itp.) jest prawdziwym błędem, nie „plik pojawił
+        // się i zniknął”.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && expected_content.is_empty() => String::new(),
+        Err(e) => return Err(format!("Nie udało się ponownie odczytać pliku tuż przed zapisem: {e}")),
+    };
+    if current != expected_content {
+        return Err(
+            "Plik zmienił się od momentu odczytu (prawdopodobnie zapisany właśnie przez Steam/Lutris) — spróbuj ponownie."
+                .to_string(),
+        );
+    }
+    std::fs::write(path, new_content).map_err(|e| format!("Nie udało się zapisać pliku: {e}"))
+}
+
 /// Usuwa najstarsze kopie zapasowe danego pliku ponad
 /// `MAX_BACKUPS_PER_FILE` — wywoływane po KAŻDYM udanym
 /// `backup_before_write`, żeby katalog nigdy nie urósł ponad ten limit,
@@ -288,7 +337,7 @@ pub fn set_steam_compat_tool(appid: &str, internal_name: &str) -> Result<Option<
     };
 
     let patched = format!("{}{}{}", &content[..section_start], new_section, &content[section_end..]);
-    std::fs::write(&path, patched).map_err(|e| format!("Nie udało się zapisać config.vdf: {e}"))?;
+    write_if_unchanged(&path, &content, &patched)?;
 
     if steam_running {
         Ok(Some(
@@ -501,7 +550,7 @@ pub fn set_lutris_wine_version(slug: &str, version: &str) -> Result<Option<Strin
     backup_before_write(&path);
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let patched = patch_yaml_wine_version(&content, version);
-    std::fs::write(&path, patched).map_err(|e| format!("Nie udało się zapisać konfiguracji Lutrisa: {e}"))?;
+    write_if_unchanged(&path, &content, &patched)?;
 
     if lutris_running {
         Ok(Some(
@@ -553,6 +602,55 @@ fn patch_yaml_wine_version(content: &str, version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_if_unchanged_writes_when_content_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.vdf");
+        std::fs::write(&path, "stara zawartość").unwrap();
+
+        write_if_unchanged(&path, "stara zawartość", "nowa zawartość").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "nowa zawartość");
+    }
+
+    #[test]
+    fn write_if_unchanged_rejects_stale_write() {
+        // Symulacja wyścigu: my odczytaliśmy "stara zawartość", ale ZANIM
+        // zdążyliśmy zapisać, Steam/Lutris (symulowane tu bezpośrednim
+        // `fs::write`) zdążyły dopisać coś swojego. Nasz zapis MUSI zostać
+        // odrzucony, żeby nie nadpisać ich zmiany po cichu.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.vdf");
+        std::fs::write(&path, "stara zawartość").unwrap();
+
+        // "Steam" dopisuje coś swojego między naszym odczytem a zapisem.
+        std::fs::write(&path, "zawartość zapisana przez Steam w międzyczasie").unwrap();
+
+        let result = write_if_unchanged(&path, "stara zawartość", "nasza nowa zawartość");
+
+        assert!(result.is_err());
+        // Plik NIE został nadpisany — zawartość zapisana przez "Steam"
+        // przetrwała.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "zawartość zapisana przez Steam w międzyczasie"
+        );
+    }
+
+    #[test]
+    fn write_if_unchanged_creates_missing_file_when_expected_empty() {
+        // Odpowiednik `set_lutris_wine_version`, gdzie brak pliku przy
+        // pierwszym odczycie jest traktowany jak pusta zawartość
+        // (`unwrap_or_default()`).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nowa-gra.yml");
+        assert!(!path.exists());
+
+        write_if_unchanged(&path, "", "wine:\n  version: proton-ge\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "wine:\n  version: proton-ge\n");
+    }
 
     #[test]
     fn backup_before_write_copies_existing_file() {
