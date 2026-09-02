@@ -528,6 +528,67 @@ pub fn fetch_owned_games(api_key: &str, steam_id64: &str) -> Vec<OwnedSteamGame>
     result.unwrap_or_default()
 }
 
+/// Status "w trakcie gry" pobrany z oficjalnego Steam Web API
+/// (`ISteamUser/GetPlayerSummaries/v2`) — jedyny wiarygodny sposób
+/// śledzenia REALNEGO stanu gry Steam (patrz README, „Do zrobienia
+/// dalej” i moduł-dokumentacja `launcher::watch_steam_web_api_session`):
+/// `steam -applaunch <appid>` tylko przekazuje żądanie do już
+/// działającego klienta Steam przez jego wewnętrzne IPC i kończy się
+/// PRAWIE NATYCHMIAST, więc obserwowanie PID-u TEGO polecenia (jak dla
+/// pozostałych platform, patrz `AppState::running_games`) nie mówi nic
+/// wiarygodnego o tym, czy gra faktycznie wciąż działa.
+///
+/// Kształt odpowiedzi (`response.players[0].gameid`/`gameextrainfo`) to
+/// dobrze udokumentowane, publiczne pole Steam Web API — w
+/// przeciwieństwie do np. kształtu `catalog.gog.com` (patrz `gog.rs`)
+/// nie jest to research po nieoficjalnych źródłach, tylko ten sam
+/// endpoint, którego już używa `fetch_owned_games`/`fetch_achievements`
+/// wyżej w tym pliku, z tymi samymi poświadczeniami
+/// (`Settings::steam_api_key`/`steam_id64`).
+///
+/// Zwraca:
+/// - `None` — zapytanie się nie powiodło (sieć/nieprawidłowy klucz/
+///   nieoczekiwany kształt JSON-a) LUB profil gracza nie jest publiczny.
+///   Wywołujący (patrz `launcher::watch_steam_web_api_session`) MUSI to
+///   zignorować (potraktować jako "nie wiadomo", nie jako "gra się
+///   zamknęła") — pojedynczy błąd zapytania nie oznacza, że sesja gry
+///   faktycznie dobiegła końca.
+/// - `Some(None)` — zapytanie się powiodło, ale gracz AKTUALNIE nie jest
+///   w żadnej grze (pole `gameid` nieobecne albo puste).
+/// - `Some(Some(appid))` — zapytanie się powiodło, gracz gra w grę o
+///   danym Steam AppID.
+pub fn fetch_player_current_appid(api_key: &str, steam_id64: &str) -> Option<Option<String>> {
+    let url = format!(
+        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={api_key}&steamids={steam_id64}"
+    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .ok()?;
+    let response = client.get(&url).send().ok()?;
+    if !response.status().is_success() {
+        tracing::debug!(status = %response.status(), "Steam Web API (GetPlayerSummaries) zwróciło błąd — sprawdź klucz API/SteamID64/czy profil jest publiczny");
+        return None;
+    }
+    let body = response.text().ok()?;
+    parse_player_summary_gameid(&body)
+}
+
+/// Rdzeń `fetch_player_current_appid` — parsowanie wydzielone od
+/// samego zapytania HTTP, żeby dało się je przetestować na przykładowym
+/// JSON-ie (patrz `mod tests`) bez uruchamiania prawdziwego serwera.
+fn parse_player_summary_gameid(body: &str) -> Option<Option<String>> {
+    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
+    let players = parsed.get("response")?.get("players")?.as_array()?;
+    let player = players.first()?;
+    let gameid = player
+        .get("gameid")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    Some(gameid.map(str::to_string))
+}
+
 /// Pojedyncze osiągnięcie, już scalone z danymi z `GetSchemaForGame`
 /// (nazwa/opis/ikona — `GetPlayerAchievements` sam ma tylko techniczną
 /// `apiname`, patrz `fetch_achievements`).
@@ -958,6 +1019,63 @@ fn parse_block(tokens: &[Token], pos: &mut usize) -> VdfValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Realny kształt `ISteamUser/GetPlayerSummaries/v2` dla gracza W
+    /// TRAKCIE gry — pole `gameid` to Steam AppID jako string (dobrze
+    /// udokumentowane publiczne API, patrz komentarz przy
+    /// `fetch_player_current_appid`).
+    #[test]
+    fn parses_player_summary_when_in_game() {
+        let body = r#"{
+            "response": {
+                "players": [
+                    {
+                        "steamid": "76561197960287930",
+                        "personaname": "Gracz",
+                        "gameid": "440",
+                        "gameextrainfo": "Team Fortress 2"
+                    }
+                ]
+            }
+        }"#;
+        assert_eq!(parse_player_summary_gameid(body), Some(Some("440".to_string())));
+    }
+
+    #[test]
+    fn parses_player_summary_when_not_in_game() {
+        // Poza grą Steam po prostu NIE wysyła pól `gameid`/`gameextrainfo`
+        // w ogóle (nie puste stringi) — obie sytuacje muszą dać ten sam
+        // wynik `Some(None)`, patrz też test niżej.
+        let body = r#"{
+            "response": {
+                "players": [
+                    { "steamid": "76561197960287930", "personaname": "Gracz" }
+                ]
+            }
+        }"#;
+        assert_eq!(parse_player_summary_gameid(body), Some(None));
+    }
+
+    #[test]
+    fn parses_player_summary_treats_empty_gameid_as_not_in_game() {
+        let body = r#"{"response": {"players": [{"gameid": ""}]}}"#;
+        assert_eq!(parse_player_summary_gameid(body), Some(None));
+    }
+
+    #[test]
+    fn parses_player_summary_returns_none_for_empty_players_list() {
+        // Profil prywatny/nieprawidłowe SteamID64 — API odpowiada
+        // sukcesem, ale z pustą listą graczy. Wywołujący (patrz
+        // `launcher::watch_steam_web_api_session`) musi to potraktować
+        // jak błąd zapytania (`None`), NIE jak "gra się zamknęła".
+        let body = r#"{"response": {"players": []}}"#;
+        assert_eq!(parse_player_summary_gameid(body), None);
+    }
+
+    #[test]
+    fn parses_player_summary_returns_none_for_malformed_json() {
+        assert_eq!(parse_player_summary_gameid("to nie jest JSON"), None);
+    }
 
     #[test]
     fn finds_most_recent_steamid64_from_loginusers_vdf() {
