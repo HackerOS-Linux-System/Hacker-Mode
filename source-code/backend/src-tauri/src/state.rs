@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -38,6 +38,25 @@ pub struct AppState {
     /// udokumentowane też w UI (`GameDetail.tsx`/`GameCard.tsx` nie
     /// pokazują przycisku "Zatrzymaj" dla Steam z tego właśnie powodu).
     pub running_games: Mutex<HashMap<String, u32>>,
+    /// Gry Steam, których działanie zostało POTWIERDZONE przez oficjalne
+    /// Steam Web API (`ISteamUser/GetPlayerSummaries`), niezależnie od
+    /// `running_games` powyżej — patrz moduł-dokumentacja
+    /// `launcher::watch_steam_web_api_session`. Klucz w tym samym
+    /// formacie `"<platform-slug>:<game-id>"` co `running_games` (dla
+    /// Steam zawsze `"steam:<appid>"`), tak żeby `is_game_running` mogło
+    /// sprawdzić OBIE mapy tym samym kluczem.
+    ///
+    /// Istnieje jako OSOBNA mapa, nie jako kolejny wpis w
+    /// `running_games` (który trzyma PID-y, `u32`) — bo śledzenie przez
+    /// Web API nie ma żadnego PID-u do zapisania (patrz ograniczenie
+    /// opisane przy `running_games`: proces `steam -applaunch` kończy
+    /// się na długo przed zamknięciem samej gry, więc jego PID i tak nie
+    /// nadaje się do niczego poza tym oknem czasowym). Gdy ten zestaw
+    /// zawiera dany klucz, `commands::stop_game` wciąż nie ma jak
+    /// faktycznie zatrzymać gry (brak PID-u) — status "w trakcie gry"
+    /// jest teraz dokładniejszy, ale przycisk "Zatrzymaj" dla Steam
+    /// pozostaje wyłączony z tego samego powodu co wcześniej.
+    pub steam_watched_games: Mutex<HashSet<String>>,
 }
 
 impl AppState {
@@ -47,6 +66,7 @@ impl AppState {
             settings: Mutex::new(Settings::load_or_default()),
             wrapper_active: AtomicBool::new(false),
             running_games: Mutex::new(HashMap::new()),
+            steam_watched_games: Mutex::new(HashSet::new()),
         }
     }
 
