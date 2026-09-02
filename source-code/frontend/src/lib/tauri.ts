@@ -151,6 +151,12 @@ export interface Settings {
   ea_wine_prefix: string | null;
   /** To samo co `ea_wine_prefix`, ale dla Battle.net. */
   battlenet_wine_prefix: string | null;
+  /** Odpowiednik `Settings::crash_detection_threshold_seconds` —
+   * jedno, dzielone źródło prawdy dla progu "krótka sesja = pewnie
+   * crash", czytane zarówno przez backend (`launcher.rs`), jak i przez
+   * `GameCard.tsx`/`GameDetail.tsx` (wcześniej każde z tych trzech
+   * miejsc miało własną, niezależnie wpisaną na sztywno stałą `8`). */
+  crash_detection_threshold_seconds: number;
 }
 
 export interface ActionResult {
@@ -415,6 +421,8 @@ export const api = {
   isGameRunning: (platform: Platform, gameId: string) => invoke<boolean>("is_game_running", { platform, gameId }),
 
   setCustomLaunchPrefix: (prefix: string | null) => invoke<void>("set_custom_launch_prefix", { prefix }),
+
+  setCrashDetectionThreshold: (seconds: number) => invoke<void>("set_crash_detection_threshold", { seconds }),
 
   setNotificationSettings: (notifications: NotificationSettings) =>
     invoke<void>("set_notification_settings", { notifications }),
