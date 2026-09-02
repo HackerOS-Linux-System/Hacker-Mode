@@ -214,6 +214,22 @@ const Settings: Component = () => {
             style={{ padding: "6px", "border-radius": "6px", border: "1px solid rgba(255,255,255,0.1)", background: "var(--bg)", color: "var(--text)", width: "220px" }}
           />
         </div>
+        <div class="settings-row">
+          <span>{t("crash_detection_threshold_label")}</span>
+          <input data-focusable tabIndex={0}
+            type="number"
+            min={1}
+            max={120}
+            value={settingsStore.settings().crash_detection_threshold_seconds}
+            onChange={(e) => {
+              const parsed = parseInt(e.currentTarget.value, 10);
+              const seconds = Number.isFinite(parsed) ? Math.min(120, Math.max(1, parsed)) : 8;
+              void api.setCrashDetectionThreshold(seconds);
+              settingsStore.update({ crash_detection_threshold_seconds: seconds });
+            }}
+            style={{ padding: "6px", "border-radius": "6px", border: "1px solid rgba(255,255,255,0.1)", background: "var(--bg)", color: "var(--text)", width: "80px" }}
+          />
+        </div>
       </div>
 
       <div class="settings-panel">
