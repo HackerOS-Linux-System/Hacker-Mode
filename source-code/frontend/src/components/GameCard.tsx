@@ -3,13 +3,21 @@ import { useNavigate } from "@solidjs/router";
 import { api, resolveCoverSrc, PLATFORM_LABELS, RELIABLE_RUNNING_STATE_PLATFORMS, type Game } from "@/lib/tauri";
 import { useFocusable } from "@/lib/focusNav";
 import { IconDownload, IconPlay } from "@/components/Icons";
+import { settingsStore } from "@/stores/settingsStore";
 
-/** Sesja krótsza niż to (sekundy) po starcie sugeruje, że gra się nie
- * uruchomiła poprawnie (crash przy starcie), a nie że użytkownik po
- * prostu szybko skończył grać — patrz `onGameExited` w `onMount`. Czysto
- * heurystyczne (niektóre gry/menu launcherów faktycznie zamykają się
- * szybciej), stąd tylko OSTRZEŻENIE, nie twarde stwierdzenie błędu. */
-const CRASH_THRESHOLD_SECONDS = 8;
+/** Sesja krótsza niż `settingsStore.settings().crash_detection_threshold_seconds`
+ * po starcie sugeruje, że gra się nie uruchomiła poprawnie (crash przy
+ * starcie), a nie że użytkownik po prostu szybko skończył grać — patrz
+ * `onGameExited` w `onMount`. Czysto heurystyczne (niektóre gry/menu
+ * launcherów faktycznie zamykają się szybciej), stąd tylko OSTRZEŻENIE,
+ * nie twarde stwierdzenie błędu.
+ *
+ * Wcześniej to była tu osobna stała `const CRASH_THRESHOLD_SECONDS = 8`,
+ * niezależna od identycznej stałej w `GameDetail.tsx` i w
+ * `launcher.rs` — trzy miejsca do pamiętania przy każdej zmianie. Teraz
+ * wszystkie trzy czytają `Settings::crash_detection_threshold_seconds`
+ * z tego samego obiektu ustawień (patrz panel „Zaawansowane:
+ * uruchamianie” w `Settings.tsx`). */
 
 const GameCard: Component<{
   game: Game;
@@ -83,7 +91,7 @@ const GameCard: Component<{
         setStopping(false);
         setForceAvailable(false);
         if (forceTimer) clearTimeout(forceTimer);
-        if (!ok || secondsRan < CRASH_THRESHOLD_SECONDS) {
+        if (!ok || secondsRan < settingsStore.settings().crash_detection_threshold_seconds) {
           setErrorMsg(
             `Gra zamknęła się po ${secondsRan}s${!ok ? " z błędem" : ""} — mogła się nie uruchomić poprawnie.`,
           );
