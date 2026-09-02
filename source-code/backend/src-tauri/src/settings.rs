@@ -124,6 +124,26 @@ pub struct Settings {
     pub custom_launch_prefix: Option<String>,
     #[serde(default)]
     pub notifications: NotificationSettings,
+    /// Próg (w sekundach), poniżej którego zamknięcie gry jest
+    /// traktowane jako prawdopodobny crash zamiast normalnego wyjścia —
+    /// używany zarówno przy PID-owym śledzeniu procesu (patrz
+    /// `launcher::run_wrapped`), jak i przy śledzeniu Steam przez Web API
+    /// (patrz `launcher::finish_steam_web_api_session`). Wcześniej była
+    /// to stała `8` wpisana na sztywno NIEZALEŻNIE w trzech miejscach
+    /// (`launcher.rs`, `GameCard.tsx`, `GameDetail.tsx`, patrz README
+    /// „Do zrobienia dalej” — ta sama wartość, ale trzy osobne źródła
+    /// prawdy, które trzeba było pamiętać zmieniać razem) — teraz jest to
+    /// jedno, konfigurowalne ustawienie (patrz panel „Zaawansowane:
+    /// uruchamianie” w `Settings.tsx` i komenda
+    /// `commands::set_crash_detection_threshold`), które frontend czyta
+    /// z tego samego obiektu `Settings` co resztę ustawień zamiast
+    /// trzymać własną kopię liczby.
+    #[serde(default = "default_crash_detection_threshold_seconds")]
+    pub crash_detection_threshold_seconds: u64,
+}
+
+fn default_crash_detection_threshold_seconds() -> u64 {
+    8
 }
 
 /// Granularna kontrola nad powiadomieniami systemowymi (patrz
@@ -183,6 +203,7 @@ impl Default for Settings {
             game_controller_configs: HashMap::new(),
             custom_launch_prefix: None,
             notifications: NotificationSettings::default(),
+            crash_detection_threshold_seconds: default_crash_detection_threshold_seconds(),
         }
     }
 }
