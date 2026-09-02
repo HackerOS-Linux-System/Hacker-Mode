@@ -203,7 +203,7 @@ const GameDetail: Component = () => {
         setStopping(false);
         setForceAvailable(false);
         if (forceTimer) clearTimeout(forceTimer);
-        if (!ok || secondsRan < 8) {
+        if (!ok || secondsRan < settingsStore.settings().crash_detection_threshold_seconds) {
           setMessage(`Gra zamknęła się po ${secondsRan}s${!ok ? " z błędem" : ""} — mogła się nie uruchomić poprawnie.`);
         }
       }
