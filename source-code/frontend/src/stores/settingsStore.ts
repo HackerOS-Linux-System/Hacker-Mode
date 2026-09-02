@@ -20,6 +20,7 @@ const defaultSettings: Settings = {
   notifications: { on_install: true, on_game_exit: true, on_backup_error: true },
   ea_wine_prefix: null,
   battlenet_wine_prefix: null,
+  crash_detection_threshold_seconds: 8,
 };
 
 const [settings, setSettings] = createSignal<Settings>(defaultSettings);
