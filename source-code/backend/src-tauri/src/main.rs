@@ -110,6 +110,7 @@ fn main() -> anyhow::Result<()> {
             commands::stop_game,
             commands::is_game_running,
             commands::set_custom_launch_prefix,
+            commands::set_crash_detection_threshold,
             commands::set_notification_settings,
             commands::launch_store_client,
             commands::restart_apps,
