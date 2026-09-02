@@ -624,6 +624,20 @@ pub fn set_custom_launch_prefix(state: State<AppState>, prefix: Option<String>) 
     settings.save().map_err(|e| e.to_string())
 }
 
+/// Ustawia `Settings::crash_detection_threshold_seconds` (patrz jego
+/// dokumentacja w `settings.rs` — jedno, dzielone źródło prawdy zamiast
+/// trzech niezależnie wpisanych na sztywno stałych). Ograniczone do
+/// rozsądnego zakresu 1-120s: `0` zamieniałoby w "crash" KAŻDE
+/// zamknięcie gry (nawet natychmiast po normalnym wyjściu), a wartości
+/// rzędu minut przestałyby odróżniać crash od po prostu bardzo krótkiej,
+/// ale celowej sesji.
+#[tauri::command]
+pub fn set_crash_detection_threshold(state: State<AppState>, seconds: u64) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap();
+    settings.crash_detection_threshold_seconds = seconds.clamp(1, 120);
+    settings.save().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn set_notification_settings(
     state: State<AppState>,
