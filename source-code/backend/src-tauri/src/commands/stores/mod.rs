@@ -451,6 +451,28 @@ pub fn build_uninstall_command(platform: Platform, game_id: &str) -> Result<Comm
     }
 }
 
+/// Hak wywoływany PO potwierdzonym sukcesie instalacji (patrz
+/// `launcher::install_game`) — dziś potrzebny WYŁĄCZNIE dla GOG, które
+/// (w przeciwieństwie do Epic/Amazon, gdzie `legendary`/`nile` same
+/// utrzymują swój stan zainstalowanych gier) nie ma żadnej podkomendy do
+/// wylistowania zainstalowanych gier, więc Hacker Mode musi sam
+/// zapisać, że instalacja się powiodła — patrz moduł-dokumentacja
+/// `gog::GogInstalledManifest`. Dla pozostałych platform to zwyczajnie
+/// no-op.
+pub fn on_install_finished(platform: Platform, game_id: &str) {
+    if platform == Platform::Gog {
+        gog::record_installed(game_id);
+    }
+}
+
+/// Odpowiednik `on_install_finished`, wywoływane po potwierdzonym
+/// sukcesie odinstalowania — patrz `gog::forget_installed`.
+pub fn on_uninstall_finished(platform: Platform, game_id: &str) {
+    if platform == Platform::Gog {
+        gog::forget_installed(game_id);
+    }
+}
+
 pub fn is_logged_in(platform: Platform) -> bool {
     match platform {
         Platform::Steam => steam::SteamProvider::default().is_logged_in(),
