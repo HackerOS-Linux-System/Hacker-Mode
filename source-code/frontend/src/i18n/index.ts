@@ -121,6 +121,7 @@ export interface Translation {
   advanced_launch_panel_title: string;
   advanced_launch_panel_body: string;
   custom_launch_prefix_label: string;
+  crash_detection_threshold_label: string;
   notifications_panel_title: string;
   notifications_panel_body: string;
   notification_on_install: string;
@@ -251,6 +252,7 @@ export const translations: Record<Lang, Translation> = {
     advanced_launch_panel_title: "Zaawansowane: uruchamianie",
     advanced_launch_panel_body: "Polecenie, którym owinięte zostanie KAŻDE uruchomienie gry — np. „gamemoderun” (Feral GameMode) albo „prime-run” (przełączanie na kartę graficzną NVIDIA Optimus). Nakładane na zewnątrz Gamescope, jeśli też jest włączony.",
     custom_launch_prefix_label: "Prefiks uruchamiania",
+    crash_detection_threshold_label: "Próg wykrywania crasha (s)",
     notifications_panel_title: "Powiadomienia systemowe",
     notifications_panel_body: "Które zdarzenia mają wysyłać powiadomienie systemowe (notify-send) — przydatne, gdy Hacker Mode działa w tle podczas gry i mógłbyś nie zauważyć np. nieudanej instalacji.",
     notification_on_install: "Instalacja/deinstalacja zakończona",
@@ -375,6 +377,7 @@ export const translations: Record<Lang, Translation> = {
     advanced_launch_panel_title: "Advanced: launching",
     advanced_launch_panel_body: "A command every game launch gets wrapped in — e.g. \"gamemoderun\" (Feral GameMode) or \"prime-run\" (NVIDIA Optimus GPU switching). Applied outside Gamescope, if that's also enabled.",
     custom_launch_prefix_label: "Launch prefix",
+    crash_detection_threshold_label: "Crash detection threshold (s)",
     notifications_panel_title: "System notifications",
     notifications_panel_body: "Which events send a system notification (notify-send) — useful when Hacker Mode is running in the background during a game and you might miss, say, a failed install.",
     notification_on_install: "Install/uninstall finished",
@@ -499,6 +502,7 @@ export const translations: Record<Lang, Translation> = {
     advanced_launch_panel_title: "Erweitert: Starten",
     advanced_launch_panel_body: "Ein Befehl, in den JEDER Spielstart eingebettet wird — z. B. „gamemoderun“ (Feral GameMode) oder „prime-run“ (NVIDIA-Optimus-GPU-Umschaltung). Wird außerhalb von Gamescope angewendet, falls dieses ebenfalls aktiviert ist.",
     custom_launch_prefix_label: "Start-Präfix",
+    crash_detection_threshold_label: "Absturzerkennungsschwelle (s)",
     notifications_panel_title: "Systembenachrichtigungen",
     notifications_panel_body: "Welche Ereignisse eine Systembenachrichtigung (notify-send) senden — nützlich, wenn Hacker Mode während des Spiels im Hintergrund läuft und du z. B. eine fehlgeschlagene Installation verpassen könntest.",
     notification_on_install: "Installation/Deinstallation abgeschlossen",
@@ -623,6 +627,7 @@ export const translations: Record<Lang, Translation> = {
     advanced_launch_panel_title: "Avancé : lancement",
     advanced_launch_panel_body: "Une commande dans laquelle CHAQUE lancement de jeu est enveloppé — p. ex. « gamemoderun » (Feral GameMode) ou « prime-run » (bascule GPU NVIDIA Optimus). Appliquée à l'extérieur de Gamescope, si celui-ci est aussi activé.",
     custom_launch_prefix_label: "Préfixe de lancement",
+    crash_detection_threshold_label: "Seuil de détection de crash (s)",
     notifications_panel_title: "Notifications système",
     notifications_panel_body: "Quels événements envoient une notification système (notify-send) — utile quand Hacker Mode tourne en arrière-plan pendant une partie et que vous pourriez manquer, par exemple, une installation échouée.",
     notification_on_install: "Installation/désinstallation terminée",
@@ -747,6 +752,7 @@ export const translations: Record<Lang, Translation> = {
     advanced_launch_panel_title: "Avanzado: inicio",
     advanced_launch_panel_body: "Un comando en el que se envuelve CADA inicio de juego — p. ej. «gamemoderun» (Feral GameMode) o «prime-run» (cambio de GPU NVIDIA Optimus). Se aplica fuera de Gamescope, si también está activado.",
     custom_launch_prefix_label: "Prefijo de inicio",
+    crash_detection_threshold_label: "Umbral de detección de fallos (s)",
     notifications_panel_title: "Notificaciones del sistema",
     notifications_panel_body: "Qué eventos envían una notificación del sistema (notify-send) — útil cuando Hacker Mode se ejecuta en segundo plano durante una partida y podrías no notar, por ejemplo, una instalación fallida.",
     notification_on_install: "Instalación/desinstalación completada",
