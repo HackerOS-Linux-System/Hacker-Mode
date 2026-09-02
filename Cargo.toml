@@ -25,7 +25,7 @@ members = [
 # wyjaśnienie zakresu (i świadomych ograniczeń) tej integracji.
 
 [workspace.package]
-version = "0.5.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["HackerOS Team <hackeros068@gmail.com>"]
 license = "GPL-3.0"
