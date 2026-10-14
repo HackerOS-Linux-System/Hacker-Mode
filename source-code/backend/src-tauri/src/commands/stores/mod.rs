@@ -468,8 +468,10 @@ pub fn on_install_finished(platform: Platform, game_id: &str) {
 /// Odpowiednik `on_install_finished`, wywoływane po potwierdzonym
 /// sukcesie odinstalowania — patrz `gog::forget_installed`.
 pub fn on_uninstall_finished(platform: Platform, game_id: &str) {
-    if platform == Platform::Gog {
-        gog::forget_installed(game_id);
+    match platform {
+        Platform::Gog => gog::forget_installed(game_id),
+        Platform::Lutris => lutris::finish_uninstall(game_id),
+        _ => {}
     }
 }
 
@@ -527,11 +529,18 @@ pub fn login_submit(platform: Platform, code: &str) -> Result<(), StoreError> {
 /// zrzutów ekranu, tylko podstawowe metadane typu rok/gatunek; EA/
 /// Battle.net — prywatne API, patrz moduły `ea-cli`/`bnet`) — pozostaje
 /// `None`, zamiast zgadywać nieistniejący endpoint.
-pub fn fetch_game_details(platform: Platform, game_id: &str) -> Option<GameDetails> {
+///
+/// Dla Amazon/EA app/Battle.net (brak publicznego API) używamy zapasowo
+/// publicznego Steam Store API, dopasowując grę po DOKŁADNYM tytule
+/// (`steam::fetch_store_details_by_title`); `title` jest wtedy wymagany.
+pub fn fetch_game_details(platform: Platform, game_id: &str, title: Option<&str>) -> Option<GameDetails> {
     match platform {
         Platform::Steam => steam::fetch_store_details(game_id),
         Platform::Gog => gog::fetch_store_details(game_id),
         Platform::Epic => epic::fetch_store_details(game_id),
+        Platform::Amazon | Platform::Ea | Platform::BattleNet => {
+            title.filter(|t| !t.trim().is_empty()).and_then(steam::fetch_store_details_by_title)
+        }
         _ => None,
     }
 }
