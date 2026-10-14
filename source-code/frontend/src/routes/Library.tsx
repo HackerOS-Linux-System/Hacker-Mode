@@ -267,10 +267,10 @@ const Library: Component = () => {
 
       <Show
         when={!gamesStore.isLoading()}
-        fallback={<div class="empty-state">…</div>}
+        fallback={<div class="empty-state" role="status" aria-label={t("aria_loading")}>…</div>}
       >
         <Show when={filtered().length > 0} fallback={<div class="empty-state">{t("no_games_found")}</div>}>
-          <div class="grid">
+          <div class="grid" role="group" aria-label={t("aria_game_list")}>
             <For each={filtered()}>
               {(game) => (
                 <GameCard
