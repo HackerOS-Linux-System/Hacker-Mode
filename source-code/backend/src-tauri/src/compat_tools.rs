@@ -104,7 +104,80 @@ fn write_if_unchanged(path: &std::path::Path, expected_content: &str, new_conten
                 .to_string(),
         );
     }
-    std::fs::write(path, new_content).map_err(|e| format!("Nie udało się zapisać pliku: {e}"))
+    // Zapis ATOMOWY (plik tymczasowy + rename) z zachowaniem uprawnień
+    // oryginału: klient (Steam/Lutris) nigdy nie zobaczy pliku ściętego w
+    // połowie, a awaria w trakcie zapisu zostawia stary plik nietknięty.
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o777)
+    };
+    crate::util::write_atomic(path, new_content.as_bytes(), mode)
+        .map_err(|e| format!("Nie udało się zapisać pliku: {e}"))?;
+    // Weryfikacja po zapisie: to, co leży na dysku, musi być dokładnie tym, co zapisaliśmy.
+    match std::fs::read_to_string(path) {
+        Ok(on_disk) if on_disk == new_content => Ok(()),
+        Ok(_) => Err("Po zapisie zawartość pliku różni się od zapisanej (inny proces zmodyfikował go w międzyczasie)".to_string()),
+        Err(e) => Err(format!("Nie udało się zweryfikować zapisanego pliku: {e}")),
+    }
+}
+
+/// Sprawdza, czy zapis konfiguracji danego klienta jest dozwolony.
+///
+/// Wcześniej samo wykrycie działającego Steama/Lutrisa dawało tylko
+/// ostrzeżenie PO zapisie. Steam trzyma `config.vdf` w pamięci i nadpisuje
+/// go przy zamknięciu, więc zapis przy działającym kliencie jest zwykle
+/// bezskuteczny, a w najgorszym razie ściga się z jego własnym zapisem.
+/// Teraz domyślnie ODMAWIAMY (z czytelnym komunikatem); użytkownik może to
+/// świadomie wyłączyć ustawieniem `allow_config_write_while_running`.
+///
+/// Zwraca `Ok(true)`, gdy klient działa, ale zapis jest jawnie dozwolony
+/// (wywołujący dołącza wtedy ostrzeżenie), `Ok(false)`, gdy klient nie działa.
+fn check_write_allowed(client_label: &str, process_name: &str) -> Result<bool, String> {
+    let running = is_process_running(process_name);
+    if !running {
+        return Ok(false);
+    }
+    if crate::settings::Settings::load_or_default().allow_config_write_while_running {
+        return Ok(true);
+    }
+    Err(format!(
+        "{client_label} jest uruchomiony - zamknij go przed zmianą tego ustawienia (inaczej nadpisze plik przy zamknięciu). \
+         Możesz to wyłączyć w Ustawienia → Zaawansowane → „Zezwalaj na zapis konfiguracji przy działającym kliencie”."
+    ))
+}
+
+/// Strukturalna kontrola VDF: nawiasy klamrowe poza cudzysłowami muszą się
+/// bilansować, a cudzysłowy domykać. To NIE jest pełny parser - łapie
+/// najgorszy rodzaj błędu chirurgicznego patcha (uszkodzenie struktury
+/// całego `config.vdf`) PRZED nadpisaniem pliku.
+pub(crate) fn vdf_is_structurally_valid(text: &str) -> bool {
+    let mut depth: i64 = 0;
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for ch in text.chars() {
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_quotes = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_quotes = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0 && !in_quotes
 }
 
 /// Usuwa najstarsze kopie zapasowe danego pliku ponad
@@ -164,19 +237,28 @@ fn prune_old_backups(original_path: &std::path::Path) {
 /// konsekwencją przeoczenia jest brak ostrzeżenia, nie zablokowanie
 /// funkcji.
 fn is_process_running(name: &str) -> bool {
-    let exact = std::process::Command::new("pgrep")
-        .args(["-x", name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if exact {
+    fn pgrep(args: &[&str]) -> bool {
+        std::process::Command::new("pgrep")
+            .args(args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    // Dokładna nazwa procesu (`-x`) zamiast dopasowania podciągu w całej
+    // linii poleceń (`-f steam` łapało każdy proces ze słowem "steam" w
+    // argumentach, np. edytor z otwartym ~/.steam - co po zamianie
+    // ostrzeżenia na twardą blokadę dawałoby fałszywe odmowy).
+    if pgrep(&["-x", name]) {
         return true;
     }
-    std::process::Command::new("pgrep")
-        .args(["-f", name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    match name {
+        // Pomocniczy proces Steama + Steam we Flatpaku (nazwa procesu to
+        // wtedy nie `steam`, ale linia poleceń zawiera identyfikator aplikacji).
+        "steam" => pgrep(&["-x", "steamwebhelper"]) || pgrep(&["-f", "com\\.valvesoftware\\.Steam"]),
+        // Lutris to skrypt Pythona: `python3 /usr/bin/lutris ...`.
+        "lutris" => pgrep(&["-f", "(^|/)lutris( |$)"]),
+        _ => false,
+    }
 }
 
 // ===================== Steam =====================
@@ -303,7 +385,7 @@ pub fn get_steam_compat_tool(appid: &str) -> Option<String> {
 /// zostać nadpisany przez Steam przy jego następnym własnym zapisie.
 pub fn set_steam_compat_tool(appid: &str, internal_name: &str) -> Result<Option<String>, String> {
     let path = config_vdf_path().ok_or("Nie znaleziono katalogu Steam")?;
-    let steam_running = is_process_running("steam");
+    let steam_running = check_write_allowed("Steam", "steam")?;
     backup_before_write(&path);
     let content = std::fs::read_to_string(&path).map_err(|e| format!("Nie udało się odczytać config.vdf: {e}"))?;
 
@@ -337,6 +419,11 @@ pub fn set_steam_compat_tool(appid: &str, internal_name: &str) -> Result<Option<
     };
 
     let patched = format!("{}{}{}", &content[..section_start], new_section, &content[section_end..]);
+    // Nie piszemy, jeśli patch zepsułby strukturę pliku, który wcześniej
+    // był poprawny (patrz `vdf_is_structurally_valid`).
+    if vdf_is_structurally_valid(&content) && !vdf_is_structurally_valid(&patched) {
+        return Err("Zmiana uszkodziłaby strukturę config.vdf - przerwano bez zapisu (plik nietknięty).".to_string());
+    }
     write_if_unchanged(&path, &content, &patched)?;
 
     if steam_running {
@@ -348,7 +435,7 @@ pub fn set_steam_compat_tool(appid: &str, internal_name: &str) -> Result<Option<
     }
 }
 
-fn config_vdf_path() -> Option<PathBuf> {
+pub(crate) fn config_vdf_path() -> Option<PathBuf> {
     Some(crate::commands::stores::steam::SteamProvider::find_root()?.join("config/config.vdf"))
 }
 
@@ -546,7 +633,7 @@ pub fn set_lutris_wine_version(slug: &str, version: &str) -> Result<Option<Strin
     let path = lutris_game_yaml_path(slug).ok_or_else(|| {
         "Nie udało się zlokalizować pliku konfiguracyjnego tej gry w Lutrisie".to_string()
     })?;
-    let lutris_running = is_process_running("lutris");
+    let lutris_running = check_write_allowed("Lutris", "lutris")?;
     backup_before_write(&path);
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let patched = patch_yaml_wine_version(&content, version);
@@ -783,6 +870,26 @@ mod tests {
     #[test]
     fn parse_compat_tool_vdf_missing_file_returns_none() {
         assert!(parse_compat_tool_vdf(std::path::Path::new("/nonexistent/compatibilitytool.vdf")).is_none());
+    }
+
+    #[test]
+    fn vdf_structure_check_accepts_balanced_and_rejects_broken() {
+        assert!(vdf_is_structurally_valid("\"a\"\n{\n\t\"b\"\t\"c{\"\n}\n"));
+        assert!(!vdf_is_structurally_valid("\"a\"\n{\n\t\"b\"\t\"c\"\n"));
+        assert!(!vdf_is_structurally_valid("\"a\"\n}\n{"));
+        assert!(!vdf_is_structurally_valid("\"a\n{}"));
+    }
+
+    #[test]
+    fn write_if_unchanged_is_atomic_and_keeps_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.vdf");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_if_unchanged(&path, "old", "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
     }
 
     #[test]
