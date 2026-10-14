@@ -28,13 +28,21 @@ enum Mode {
     /// Tryb deweloperski: okno (nie fullscreen), bez integracji z
     /// comphwde/zasilaniem, przydatny do iteracji nad UI.
     Dev,
+    /// Diagnostyka: zależności, kompozytor i zgodność parserów z prawdziwymi
+    /// plikami Steam/Lutris/Heroic/Bottles (tylko odczyt).
+    Doctor,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if matches!(cli.command, Some(Mode::Doctor)) {
+        first_run::prepend_venv_to_path();
+        std::process::exit(hacker_mode_lib::doctor::run_cli());
+    }
     let dev_mode = matches!(cli.command, Some(Mode::Dev));
 
     init_logging(dev_mode)?;
+    install_panic_hook();
     tracing::info!(dev_mode, "Uruchamianie Hacker Mode");
 
     // Musi się wydarzyć PRZED jakąkolwiek próbą wywołania `legendary`/
@@ -44,10 +52,8 @@ fn main() -> anyhow::Result<()> {
     first_run::prepend_venv_to_path();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Drugie uruchomienie tylko przywraca istniejące okno zamiast
             // odpalać kolejną instancję powłoki.
@@ -78,9 +84,10 @@ fn main() -> anyhow::Result<()> {
                     let win_for_close = win.clone();
                     win_for_close.on_window_event(move |event| {
                         if matches!(event, tauri::WindowEvent::Destroyed) {
-                            if let Err(e) = hacker_mode_ipc::shutdown_compositor(std::time::Duration::from_secs(2)) {
-                                tracing::debug!(error = %e, "Nie udało się poprosić comphwde o zamknięcie (być może już nie działa)");
-                            }
+                            hacker_mode_lib::compositor::shutdown(
+                                hacker_mode_lib::compositor::active(),
+                                std::time::Duration::from_secs(2),
+                            );
                         }
                     });
                 }
@@ -129,6 +136,9 @@ fn main() -> anyhow::Result<()> {
             commands::get_settings,
             commands::save_settings,
             commands::is_dev_mode,
+            commands::check_dependencies,
+            commands::verify_external_formats,
+            commands::get_active_compositor,
             commands::audio_action,
             commands::display_action,
             commands::network_action,
@@ -189,4 +199,16 @@ fn init_logging(dev_mode: bool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Panika w dowolnym wątku (np. wątku czekającym na zakończenie gry) trafia
+/// do logu z lokalizacją, zamiast zniknąć na stderr sesji, którego nikt nie
+/// czyta. Nie zmienia zachowania (`panic = "unwind"`): pojedynczy wątek
+/// kończy się, a zatrute mutexy są odzyskiwane przez `LockExt::lock_safe`.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(panic = %info, "Panika w wątku");
+        default(info);
+    }));
 }
