@@ -1,3 +1,4 @@
+use crate::util::LockExt;
 use super::{tool_available, Game, LoginFlow, Platform, StoreError, StoreProvider};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
@@ -22,8 +23,7 @@ static PENDING_LOGIN_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 pub fn take_pending_login_child() -> Option<Child> {
     PENDING_LOGIN_CHILD
         .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap()
+        .lock_safe()
         .take()
 }
 
@@ -86,7 +86,7 @@ impl StoreProvider for AmazonProvider {
                 // NIE porzucamy go bez śledzenia wyniku (to był błąd w
                 // poprzedniej wersji: proces stawał się sierotą, a UI nie
                 // dostawało żadnej informacji o niepowodzeniu logowania).
-                *PENDING_LOGIN_CHILD.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(child);
+                *PENDING_LOGIN_CHILD.get_or_init(|| Mutex::new(None)).lock_safe() = Some(child);
                 Ok(LoginFlow {
                     url: Some(url),
                     instructions: "Zaloguj się na swoje konto Amazon w otwartym oknie. Po \
