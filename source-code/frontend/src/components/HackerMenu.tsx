@@ -1,4 +1,4 @@
-import { Component } from "solid-js";
+import { Component, onMount, onCleanup } from "solid-js";
 import { api } from "@/lib/tauri";
 import { settingsStore } from "@/stores/settingsStore";
 import { getText } from "@/i18n";
@@ -6,11 +6,23 @@ import { IconRefresh, IconMonitor, IconMoon, IconPower } from "@/components/Icon
 
 const HackerMenu: Component<{ onClose: () => void }> = (props) => {
   const t = (key: Parameters<typeof getText>[1]) => getText(settingsStore.lang(), key);
+  let firstButton: HTMLButtonElement | undefined;
+
+  // Dostępność: Escape zamyka menu, a fokus trafia od razu do pierwszego
+  // przycisku (czytnik ekranu ogłasza okno dialogowe i jego zawartość).
+  onMount(() => {
+    firstButton?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") props.onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
 
   return (
     <div class="hacker-menu-overlay" onClick={props.onClose}>
-      <div class="hacker-menu" onClick={(e) => e.stopPropagation()}>
-        <button class="ghost-btn" onClick={() => api.restartApps()}>
+      <div class="hacker-menu" role="dialog" aria-modal="true" aria-label={t("hacker_menu")} onClick={(e) => e.stopPropagation()}>
+        <button class="ghost-btn" ref={firstButton} onClick={() => api.restartApps()}>
           <IconRefresh /> {t("restart_apps")}
         </button>
         <button class="ghost-btn" onClick={() => api.switchToDesktopSession("plasma")}>
