@@ -1,5 +1,6 @@
 pub mod stores;
 
+use crate::util::LockExt;
 use tauri::{AppHandle, State};
 
 use crate::settings::Settings;
@@ -53,7 +54,7 @@ fn build_steam_credentials(api_key: Option<String>, manual_steam_id64: Option<St
 
 #[tauri::command]
 pub fn list_games(state: State<AppState>) -> stores::LibraryLoadResult {
-    let settings = state.settings.lock().unwrap();
+    let settings = state.settings.lock_safe();
     let steam_api_key = settings.steam_api_key.clone();
     let steam_id64_setting = settings.steam_id64.clone();
     let enabled_platforms = settings.enabled_platforms.clone();
@@ -128,7 +129,7 @@ pub(crate) fn cover_override_key(platform: Platform, game_id: &str) -> String {
 /// literówkę w ścieżce.
 #[tauri::command]
 pub fn set_game_cover(state: State<AppState>, platform: Platform, game_id: String, cover_url: Option<String>) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     let key = cover_override_key(platform, &game_id);
     match cover_url {
         Some(url) if !url.trim().is_empty() => {
@@ -161,7 +162,7 @@ pub fn set_game_cover(state: State<AppState>, platform: Platform, game_id: Strin
 /// siedmiu providerów sklepów.
 #[tauri::command]
 pub fn set_game_tags(state: State<AppState>, platform: Platform, game_id: String, tags: Vec<String>) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     let key = cover_override_key(platform, &game_id);
     let cleaned: Vec<String> = tags
         .into_iter()
@@ -221,8 +222,8 @@ pub fn uninstall_game(app: AppHandle, platform: Platform, game_id: String) -> Re
 }
 
 #[tauri::command]
-pub fn fetch_game_details(platform: Platform, game_id: String) -> Option<stores::GameDetails> {
-    stores::fetch_game_details(platform, &game_id)
+pub fn fetch_game_details(platform: Platform, game_id: String, title: Option<String>) -> Option<stores::GameDetails> {
+    stores::fetch_game_details(platform, &game_id, title.as_deref())
 }
 
 #[tauri::command]
@@ -254,6 +255,11 @@ pub fn search_gog_store(query: String) -> Vec<stores::gog::StoreSearchResult> {
 /// otwiera zewnętrzne odnośniki dla platform bez wbudowanego webview.
 #[tauri::command]
 pub fn open_gog_store_page(slug: String) -> Result<(), String> {
+    // Slug trafia do adresu URL przekazywanego do `xdg-open` - dopuszczamy
+    // wyłącznie znaki spotykane w slugach GOG.
+    if slug.is_empty() || !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("Niepoprawny identyfikator gry GOG".to_string());
+    }
     std::process::Command::new("xdg-open")
         .arg(format!("https://www.gog.com/game/{slug}"))
         .spawn()
@@ -290,14 +296,29 @@ pub fn submit_store_login_code(app: AppHandle, platform: Platform, code: String)
 
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> Settings {
-    state.settings.lock().unwrap().clone()
+    state.settings.lock_safe().clone()
 }
 
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
     settings.save().map_err(|e| e.to_string())?;
-    *state.settings.lock().unwrap() = settings;
+    *state.settings.lock_safe() = settings;
     Ok(())
+}
+
+#[tauri::command]
+pub fn check_dependencies() -> Vec<crate::doctor::ToolCheck> {
+    crate::doctor::check_dependencies()
+}
+
+#[tauri::command]
+pub fn verify_external_formats() -> Vec<crate::doctor::FormatCheck> {
+    crate::doctor::verify_external_formats()
+}
+
+#[tauri::command]
+pub fn get_active_compositor() -> String {
+    crate::compositor::active().as_str().to_string()
 }
 
 #[tauri::command]
@@ -419,7 +440,7 @@ pub fn fetch_protondb_rating(appid: u64) -> Option<crate::protondb::ProtonDbSumm
 #[tauri::command]
 pub fn fetch_steam_achievements(state: State<AppState>, appid: String) -> Vec<stores::steam::Achievement> {
     const TTL_SECONDS: u64 = 60 * 15;
-    let settings = state.settings.lock().unwrap();
+    let settings = state.settings.lock_safe();
     let (Some(api_key), Some(steam_id64)) = (settings.steam_api_key.clone(), settings.steam_id64.clone()) else {
         return Vec::new();
     };
@@ -521,7 +542,7 @@ pub fn get_playtime_last_played() -> std::collections::HashMap<String, u64> {
 /// wyjaśnienie, dlaczego to ręczne, nie automatycznie wykrywane.
 #[tauri::command]
 pub fn set_game_save_path(state: State<AppState>, platform: Platform, game_id: String, path: Option<String>) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     let key = cover_override_key(platform, &game_id);
     match path {
         Some(p) if !p.trim().is_empty() => {
@@ -537,8 +558,7 @@ pub fn set_game_save_path(state: State<AppState>, platform: Platform, game_id: S
 fn require_backup_root(state: &State<AppState>) -> Result<std::path::PathBuf, String> {
     let dir = state
         .settings
-        .lock()
-        .unwrap()
+        .lock_safe()
         .cloud_saves_backup_dir
         .clone()
         .ok_or("Nie ustawiono katalogu na kopie zapasowe zapisów (Ustawienia → Kopie zapasowe)")?;
@@ -549,8 +569,7 @@ fn require_save_path(state: &State<AppState>, platform: Platform, game_id: &str)
     let key = cover_override_key(platform, game_id);
     state
         .settings
-        .lock()
-        .unwrap()
+        .lock_safe()
         .game_save_paths
         .get(&key)
         .cloned()
@@ -598,7 +617,7 @@ pub fn list_connected_controllers() -> Vec<crate::controllers::ConnectedControll
 /// proces.
 #[tauri::command]
 pub fn set_game_controller_config(state: State<AppState>, platform: Platform, game_id: String, config: Option<String>) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     let key = cover_override_key(platform, &game_id);
     match config {
         Some(c) if !c.trim().is_empty() => {
@@ -619,7 +638,7 @@ pub fn set_game_controller_config(state: State<AppState>, platform: Platform, ga
 /// opakowania).
 #[tauri::command]
 pub fn set_custom_launch_prefix(state: State<AppState>, prefix: Option<String>) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     settings.custom_launch_prefix = prefix.filter(|p| !p.trim().is_empty());
     settings.save().map_err(|e| e.to_string())
 }
@@ -633,7 +652,7 @@ pub fn set_custom_launch_prefix(state: State<AppState>, prefix: Option<String>) 
 /// ale celowej sesji.
 #[tauri::command]
 pub fn set_crash_detection_threshold(state: State<AppState>, seconds: u64) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     settings.crash_detection_threshold_seconds = seconds.clamp(1, 120);
     settings.save().map_err(|e| e.to_string())
 }
@@ -643,7 +662,7 @@ pub fn set_notification_settings(
     state: State<AppState>,
     notifications: crate::settings::NotificationSettings,
 ) -> Result<(), String> {
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     settings.notifications = notifications;
     settings.save().map_err(|e| e.to_string())
 }
@@ -665,7 +684,7 @@ pub fn set_notification_settings(
 /// zapisu pliku w tej aplikacji).
 #[tauri::command]
 pub fn export_settings(state: State<AppState>) -> Result<String, String> {
-    let settings = state.settings.lock().unwrap();
+    let settings = state.settings.lock_safe();
     serde_json::to_string_pretty(&*settings).map_err(|e| e.to_string())
 }
 
@@ -679,7 +698,7 @@ pub fn export_settings(state: State<AppState>) -> Result<String, String> {
 #[tauri::command]
 pub fn import_settings(state: State<AppState>, json: String) -> Result<(), String> {
     let parsed: Settings = serde_json::from_str(&json).map_err(|e| format!("Nieprawidłowy plik ustawień: {e}"))?;
-    let mut settings = state.settings.lock().unwrap();
+    let mut settings = state.settings.lock_safe();
     *settings = parsed;
     settings.save().map_err(|e| e.to_string())
 }
