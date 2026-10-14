@@ -1,3 +1,5 @@
+pub mod config;
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -65,14 +67,135 @@ pub enum IpcOutcome {
     Err { message: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+/// Result payload of a successful request.
+///
+/// WIRE-FORMAT NOTE (fixed in v1.1): this enum used to be declared with
+/// `#[serde(tag = "kind")]` (internal tagging). serde cannot represent an
+/// internally-tagged *newtype variant holding a sequence* at all - neither
+/// serialize nor deserialize it - so `ListWindows`/`ListWorkspaces`/
+/// `ListOutputs` responses could never be decoded by this client, whatever
+/// the server sent (the mock integration test in `tests/mock_comphwde.rs`
+/// reproduces this). The canonical shape is now adjacent tagging, the same
+/// one `IpcEvent` already uses: `{"kind":"windows","data":[...]}`.
+///
+/// Because the real `comphwde` source is not available to this repository,
+/// *deserialization is deliberately lenient* (see
+/// [`IpcResult::from_value_lenient`]): it also accepts the array under any
+/// other key (`windows`, `result`, ...), a bare array, and a few spellings
+/// of the unit results. If comphwde's real shape is still not recognized,
+/// the error says so instead of silently misbehaving.
+#[derive(Debug, Clone)]
 pub enum IpcResult {
     None,
     Pong,
     Windows(Vec<WindowInfo>),
     Workspaces(Vec<WorkspaceInfo>),
     Outputs(Vec<OutputInfo>),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+enum IpcResultRepr {
+    None,
+    Pong,
+    Windows(Vec<WindowInfo>),
+    Workspaces(Vec<WorkspaceInfo>),
+    Outputs(Vec<OutputInfo>),
+}
+
+impl From<IpcResultRepr> for IpcResult {
+    fn from(r: IpcResultRepr) -> Self {
+        match r {
+            IpcResultRepr::None => IpcResult::None,
+            IpcResultRepr::Pong => IpcResult::Pong,
+            IpcResultRepr::Windows(v) => IpcResult::Windows(v),
+            IpcResultRepr::Workspaces(v) => IpcResult::Workspaces(v),
+            IpcResultRepr::Outputs(v) => IpcResult::Outputs(v),
+        }
+    }
+}
+
+impl From<&IpcResult> for IpcResultRepr {
+    fn from(r: &IpcResult) -> Self {
+        match r {
+            IpcResult::None => IpcResultRepr::None,
+            IpcResult::Pong => IpcResultRepr::Pong,
+            IpcResult::Windows(v) => IpcResultRepr::Windows(v.clone()),
+            IpcResult::Workspaces(v) => IpcResultRepr::Workspaces(v.clone()),
+            IpcResult::Outputs(v) => IpcResultRepr::Outputs(v.clone()),
+        }
+    }
+}
+
+impl Serialize for IpcResult {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        IpcResultRepr::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for IpcResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        IpcResult::from_value_lenient(&value)
+            .ok_or_else(|| serde::de::Error::custom(format!("nierozpoznany kształt wyniku IPC: {value}")))
+    }
+}
+
+impl IpcResult {
+    /// Decodes a result from arbitrary JSON, trying the canonical shape
+    /// first and then progressively looser interpretations.
+    pub fn from_value_lenient(value: &serde_json::Value) -> Option<IpcResult> {
+        use serde_json::Value;
+
+        if let Ok(strict) = serde_json::from_value::<IpcResultRepr>(value.clone()) {
+            return Some(strict.into());
+        }
+        match value {
+            Value::Null => Some(IpcResult::None),
+            Value::String(s) => match s.to_ascii_lowercase().as_str() {
+                "none" | "ok" | "null" => Some(IpcResult::None),
+                "pong" => Some(IpcResult::Pong),
+                _ => None,
+            },
+            Value::Array(items) => Self::from_items(None, items),
+            Value::Object(map) => {
+                let kind = map.get("kind").and_then(Value::as_str).map(str::to_ascii_lowercase);
+                let array = map.iter().filter(|(k, _)| k.as_str() != "kind").find_map(|(_, v)| v.as_array());
+                match (kind.as_deref(), array) {
+                    (Some("pong"), _) => Some(IpcResult::Pong),
+                    (Some("none"), _) => Some(IpcResult::None),
+                    (kind, Some(items)) => Self::from_items(kind, items),
+                    (Some("windows"), None) => Some(IpcResult::Windows(Vec::new())),
+                    (Some("workspaces"), None) => Some(IpcResult::Workspaces(Vec::new())),
+                    (Some("outputs"), None) => Some(IpcResult::Outputs(Vec::new())),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn from_items(kind: Option<&str>, items: &[serde_json::Value]) -> Option<IpcResult> {
+        let kind = match kind {
+            Some(k) => k.to_string(),
+            None => match items.first() {
+                None => "windows".to_string(),
+                Some(first) if first.get("app_id").is_some() => "windows".to_string(),
+                Some(first) if first.get("window_count").is_some() => "workspaces".to_string(),
+                Some(_) => "outputs".to_string(),
+            },
+        };
+        let parse = |what: &str| -> Option<serde_json::Value> {
+            let _ = what;
+            Some(serde_json::Value::Array(items.to_vec()))
+        };
+        match kind.as_str() {
+            "windows" => serde_json::from_value(parse("windows")?).ok().map(IpcResult::Windows),
+            "workspaces" => serde_json::from_value(parse("workspaces")?).ok().map(IpcResult::Workspaces),
+            "outputs" => serde_json::from_value(parse("outputs")?).ok().map(IpcResult::Outputs),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,7 +299,18 @@ unsafe fn libc_getuid() -> u32 {
 }
 
 /// Path to the control socket for `comphwde --extern-hacker-mode`.
+///
+/// `HACKER_MODE_IPC_SOCKET` (if set and non-empty) overrides the default
+/// location. This exists so integration tests can point the client at a
+/// mock server (see `tests/mock_comphwde.rs`) and so `scripts/test-session-*`
+/// can exercise the client without a real compositor; production sessions
+/// never set it.
 pub fn socket_path() -> PathBuf {
+    if let Ok(custom) = std::env::var("HACKER_MODE_IPC_SOCKET") {
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
+    }
     runtime_dir().join("comphwde-hacker-mode.sock")
 }
 
@@ -383,6 +517,41 @@ mod tests {
         let back: IpcResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back.id, 1);
         matches!(back.outcome, IpcOutcome::Ok { result: IpcResult::Pong });
+    }
+
+    fn sample_window_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": 1, "title": "t", "app_id": "a", "workspace": 1,
+            "focused": false, "minimized": false, "maximized": false, "floating": false
+        })
+    }
+
+    #[test]
+    fn windows_result_roundtrips_canonical_shape() {
+        let json = serde_json::json!({"kind": "windows", "data": [sample_window_json()]});
+        let r: IpcResult = serde_json::from_value(json.clone()).unwrap();
+        assert!(matches!(&r, IpcResult::Windows(w) if w.len() == 1));
+        assert_eq!(serde_json::to_value(&r).unwrap(), json);
+    }
+
+    #[test]
+    fn windows_result_accepts_alternative_shapes() {
+        for json in [
+            serde_json::json!({"kind": "windows", "windows": [sample_window_json()]}),
+            serde_json::json!({"kind": "windows", "result": [sample_window_json()]}),
+            serde_json::json!([sample_window_json()]),
+        ] {
+            let r: IpcResult = serde_json::from_value(json).unwrap();
+            assert!(matches!(r, IpcResult::Windows(w) if w.len() == 1));
+        }
+    }
+
+    #[test]
+    fn unit_results_and_garbage() {
+        assert!(matches!(serde_json::from_value::<IpcResult>(serde_json::json!({"kind":"pong"})).unwrap(), IpcResult::Pong));
+        assert!(matches!(serde_json::from_value::<IpcResult>(serde_json::json!({"kind":"none"})).unwrap(), IpcResult::None));
+        assert!(matches!(serde_json::from_value::<IpcResult>(serde_json::json!("pong")).unwrap(), IpcResult::Pong));
+        assert!(serde_json::from_value::<IpcResult>(serde_json::json!({"foo": 1})).is_err());
     }
 
     #[test]
