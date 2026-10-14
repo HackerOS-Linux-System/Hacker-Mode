@@ -4,6 +4,7 @@ import { api, resolveCoverSrc, PLATFORM_LABELS, RELIABLE_RUNNING_STATE_PLATFORMS
 import { useFocusable } from "@/lib/focusNav";
 import { IconDownload, IconPlay } from "@/components/Icons";
 import { settingsStore } from "@/stores/settingsStore";
+import { getText } from "@/i18n";
 
 /** Sesja krótsza niż `settingsStore.settings().crash_detection_threshold_seconds`
  * po starcie sugeruje, że gra się nie uruchomiła poprawnie (crash przy
@@ -160,8 +161,8 @@ const GameCard: Component<{
   }
 
   return (
-    <div class="game-card" ref={focusable.ref} tabIndex={0} data-focusable>
-      <button class="cover" onClick={primaryAction} disabled={launching() || installing()}>
+    <div class="game-card" ref={focusable.ref} tabIndex={0} data-focusable role="group" aria-label={props.game.title}>
+      <button class="cover" onClick={primaryAction} disabled={launching() || installing()} aria-label={getText(settingsStore.lang(), "aria_launch_game", { name: props.game.title })} aria-busy={launching() || installing()}>
         {props.game.cover_path ? (
           <img
             src={resolveCoverSrc(props.game.cover_path)}
@@ -222,7 +223,7 @@ const GameCard: Component<{
           {progressLine()}
         </div>
         <Show when={progressPercent() !== null}>
-          <div style={{ height: "4px", background: "rgba(255,255,255,0.08)", "border-radius": "999px", overflow: "hidden" }}>
+          <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent() ?? 0} style={{ height: "4px", background: "rgba(255,255,255,0.08)", "border-radius": "999px", overflow: "hidden" }}>
             <div
               style={{
                 height: "100%",
