@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<!--
+  hacker-mode:generated
+  Konfiguracja labwc dla sesji Hacker Mode. Plik jest KOPIOWANY przez
+  `hacker-mode-session` do ~/.config/Hacker-Mode/labwc/rc.xml przy każdym
+  starcie sesji, dopóki zawiera powyższy znacznik. Aby wprowadzić własne
+  zmiany, USUŃ znacznik (wtedy plik nie będzie już nadpisywany).
+
+  Zasady okien (tryb "wrapper"): każde okno bez ramki i zmaksymalizowane.
+  Powłoka Hacker Mode ma dodatkowo pełny ekran z poziomu Tauri
+  (tauri.conf.json: fullscreen=true). Reguły działają w chwili mapowania
+  okna, więc nie ma wyścigu "które okno jest nowe" znanego z IPC.
+-->
+<labwc_config>
+  <core>
+    <gap>0</gap>
+  </core>
+
+  <desktops>
+    <number>1</number>
+  </desktops>
+
+  <keyboard>
+    <!-- Celowo bez <default />: żadnych domyślnych skrótów otwierających
+         menu/terminal. Tylko przełączanie okien i zamknięcie gry. -->
+    <keybind key="A-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+    <keybind key="W-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+    <keybind key="A-F4">
+      <action name="Close"/>
+    </keybind>
+  </keyboard>
+
+  <windowRules>
+    <windowRule identifier="*">
+      <serverDecoration>no</serverDecoration>
+      <action name="Maximize"/>
+    </windowRule>
+  </windowRules>
+</labwc_config>
