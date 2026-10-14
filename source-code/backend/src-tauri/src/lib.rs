@@ -1,8 +1,10 @@
 pub mod cloud_saves;
+pub mod compositor;
 pub mod commands;
 pub mod compat_tools;
 pub mod controllers;
 pub mod cover_cache;
+pub mod doctor;
 pub mod external_sources;
 pub mod first_run;
 pub mod launcher;
@@ -15,3 +17,4 @@ pub mod state;
 pub mod steamgriddb;
 pub mod store_login;
 pub mod system;
+pub mod util;
