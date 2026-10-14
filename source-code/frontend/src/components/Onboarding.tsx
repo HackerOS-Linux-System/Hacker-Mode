@@ -51,6 +51,9 @@ const Onboarding: Component<{ onDone: () => void }> = (props) => {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="onboarding-title"
       style={{
         position: "fixed",
         inset: "0",
@@ -65,7 +68,7 @@ const Onboarding: Component<{ onDone: () => void }> = (props) => {
     >
       <div style={{ "max-width": "560px", width: "100%" }}>
         <Show when={step() === "welcome"}>
-          <h1 style={{ "font-size": "32px", "margin-bottom": "4px" }}>{t("onboarding_welcome_title")}</h1>
+          <h1 id="onboarding-title" style={{ "font-size": "32px", "margin-bottom": "4px" }}>{t("onboarding_welcome_title")}</h1>
           <p style={{ color: "var(--text-muted)", "line-height": "1.5" }}>{t("onboarding_welcome_body")}</p>
 
           <div class="settings-panel" style={{ "margin-top": "24px" }}>
@@ -145,7 +148,7 @@ const Onboarding: Component<{ onDone: () => void }> = (props) => {
         </Show>
 
         <Show when={step() === "done"}>
-          <h1 style={{ "font-size": "28px" }}>{t("onboarding_welcome_title")} 🎮</h1>
+          <h1 id="onboarding-title" style={{ "font-size": "28px" }}>{t("onboarding_welcome_title")} 🎮</h1>
           <button class="primary-btn" data-focusable tabIndex={0} style={{ "margin-top": "20px", width: "100%" }} onClick={finish}>
             {t("onboarding_finish")}
           </button>
