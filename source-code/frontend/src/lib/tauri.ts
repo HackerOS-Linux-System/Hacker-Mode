@@ -122,7 +122,28 @@ export interface NotificationSettings {
   on_backup_error: boolean;
 }
 
+/** Kompozytor sesji — patrz `settings.rs::Compositor`. Zmiana działa po
+ * ponownym zalogowaniu (czyta ją `scripts/hacker-mode-session`). */
+export type Compositor = "labwc" | "comphwde";
+
+/** Odpowiednik `doctor::ToolCheck`. */
+export interface ToolCheck {
+  id: string;
+  purpose: string;
+  found: boolean;
+  critical: boolean;
+  hint: string;
+}
+
+/** Odpowiednik `doctor::FormatCheck` (`ok: null` = brak danych do sprawdzenia). */
+export interface FormatCheck {
+  name: string;
+  ok: boolean | null;
+  detail: string;
+}
+
 export interface Settings {
+  compositor: Compositor;
   language: string;
   theme: string;
   wrapper_mode_enabled: boolean;
@@ -157,6 +178,10 @@ export interface Settings {
    * `GameCard.tsx`/`GameDetail.tsx` (wcześniej każde z tych trzech
    * miejsc miało własną, niezależnie wpisaną na sztywno stałą `8`). */
   crash_detection_threshold_seconds: number;
+  /** Domyślnie false: odmowa zapisu configu Steama/Lutrisa, gdy klient działa. */
+  allow_config_write_while_running: boolean;
+  /** Domyślnie false: odinstalowanie gry Lutrisa nie kasuje plików. */
+  lutris_delete_files_on_uninstall: boolean;
 }
 
 export interface ActionResult {
@@ -280,8 +305,10 @@ export const api = {
   uninstallGame: (platform: Platform, gameId: string) =>
     invoke<void>("uninstall_game", { platform, gameId }),
 
-  fetchGameDetails: (platform: Platform, gameId: string) =>
-    invoke<GameDetails | null>("fetch_game_details", { platform, gameId }),
+  /** `title` jest używany tylko dla Amazon/EA app/Battle.net (zapasowe
+   * dopasowanie opisu po dokładnym tytule w publicznym Steam Store API). */
+  fetchGameDetails: (platform: Platform, gameId: string, title?: string) =>
+    invoke<GameDetails | null>("fetch_game_details", { platform, gameId, title: title ?? null }),
 
   searchSteamStore: (query: string) => invoke<SteamSearchResult[]>("search_steam_store", { query }),
 
@@ -354,6 +381,9 @@ export const api = {
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
 
   isDevMode: () => invoke<boolean>("is_dev_mode"),
+  checkDependencies: () => invoke<ToolCheck[]>("check_dependencies"),
+  verifyExternalFormats: () => invoke<FormatCheck[]>("verify_external_formats"),
+  getActiveCompositor: () => invoke<Compositor>("get_active_compositor"),
 
   audioAction: (action: "increase" | "decrease" | "toggle_mute") =>
     invoke<ActionResult>("audio_action", { action }),
