@@ -39,32 +39,32 @@ const NavBar: Component<{ onOpenMenu: () => void }> = (props) => {
   });
 
   return (
-    <nav class="sidebar">
-      <div class="logo">HM</div>
+    <nav class="sidebar" aria-label={t("aria_main_nav")}>
+      <div class="logo" aria-hidden="true">HM</div>
 
-      <A href="/" class={`nav-btn ${isActive("/") ? "active" : ""}`} data-focusable tabIndex={0}>
+      <A href="/" class={`nav-btn ${isActive("/") ? "active" : ""}`} data-focusable tabIndex={0} aria-current={isActive("/") ? "page" : undefined}>
         <IconHome />
         {t("home")}
       </A>
-      <A href="/library" class={`nav-btn ${isActive("/library") ? "active" : ""}`} data-focusable tabIndex={0}>
+      <A href="/library" class={`nav-btn ${isActive("/library") ? "active" : ""}`} data-focusable tabIndex={0} aria-current={isActive("/library") ? "page" : undefined}>
         <IconLibrary />
         {t("library")}
       </A>
-      <A href="/store" class={`nav-btn ${isActive("/store") ? "active" : ""}`} data-focusable tabIndex={0}>
+      <A href="/store" class={`nav-btn ${isActive("/store") ? "active" : ""}`} data-focusable tabIndex={0} aria-current={isActive("/store") ? "page" : undefined}>
         <IconStore />
         {t("store")}
       </A>
-      <A href="/stats" class={`nav-btn ${isActive("/stats") ? "active" : ""}`} data-focusable tabIndex={0}>
+      <A href="/stats" class={`nav-btn ${isActive("/stats") ? "active" : ""}`} data-focusable tabIndex={0} aria-current={isActive("/stats") ? "page" : undefined}>
         <IconStats />
         {t("stats")}
       </A>
-      <A href="/settings" class={`nav-btn ${isActive("/settings") ? "active" : ""}`} data-focusable tabIndex={0}>
+      <A href="/settings" class={`nav-btn ${isActive("/settings") ? "active" : ""}`} data-focusable tabIndex={0} aria-current={isActive("/settings") ? "page" : undefined}>
         <IconSettings />
         {t("settings")}
       </A>
 
       <div style={{ "margin-top": "auto" }}>
-        <button class="nav-btn" onClick={props.onOpenMenu} data-focusable tabIndex={0}>
+        <button class="nav-btn" onClick={props.onOpenMenu} data-focusable tabIndex={0} aria-haspopup="dialog">
           <IconPower />
           {t("hacker_menu")}
         </button>
