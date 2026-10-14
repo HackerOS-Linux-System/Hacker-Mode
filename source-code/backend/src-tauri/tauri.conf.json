@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hacker Mode",
-  "version": "0.10.4",
+  "version": "1.1.0",
   "identifier": "com.hackeros.hackermode",
   "build": {
     "beforeDevCommand": "npm --prefix ../../frontend run dev",
@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: https: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'",
+      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://*.steamstatic.com https://*.steampowered.com https://*.akamaihd.net https://*.steamgriddb.com https://*.gog-statics.com https://*.gog.com https://*.epicgames.com https://*.unrealengine.com https://*.media-amazon.com https://*.ssl-images-amazon.com; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -36,22 +36,35 @@
           "$HOME/.cache/lutris/**",
           "$HOME/Games/**"
         ]
-      }
+      },
+      "devCsp": "default-src 'self' http://localhost:1420 ws://localhost:1420; img-src * data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb"],
+    "targets": [
+      "appimage",
+      "deb"
+    ],
     "category": "Game",
     "shortDescription": "Tryb do gier dla HackerOS",
-    "longDescription": "Hacker Mode — sesja typu big-picture do uruchamiania i zarządzania grami ze Steam, Epic Games, GOG, Amazon Games, Lutrisa, EA app i Battle.net, działająca jako klient Wayland kompozytora comphwde (--extern-hacker-mode).",
+    "longDescription": "Hacker Mode — sesja typu big-picture do uruchamiania i zarządzania grami ze Steam, Epic Games, GOG, Amazon Games, Lutrisa, EA app i Battle.net, działająca jako klient Wayland kompozytora labwc (domyślnie) albo comphwde (opcjonalnie, config.json).",
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
       }
     },
     "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
       "icons/icon.png"
     ]
+  }
+}
+
   }
 }
