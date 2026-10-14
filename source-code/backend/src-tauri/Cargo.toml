@@ -26,10 +26,8 @@ ea-cli = { path = "../../../launchers-cli/ea-cli" }
 bnet = { path = "../../../launchers-cli/bnet" }
 
 tauri = { version = "2", features = ["protocol-asset"] }
-tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"
 
 serde = { version = "1", features = ["derive"] }
