@@ -3,6 +3,9 @@ import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialo
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { settingsStore } from "@/stores/settingsStore";
 import { getText, LANGUAGES, type Lang } from "@/i18n";
+import SessionPanel from "@/components/settings/SessionPanel";
+import SafetyPanel from "@/components/settings/SafetyPanel";
+import DependenciesPanel from "@/components/settings/DependenciesPanel";
 import { api, PLATFORM_LABELS, type Platform, type ExternalApp } from "@/lib/tauri";
 
 /// Odpowiada `Platform::slug()`/`Platform::label()` po stronie Rust
@@ -102,6 +105,8 @@ const Settings: Component = () => {
           </select>
         </div>
       </div>
+
+      <SessionPanel />
 
       <div class="settings-panel">
         <h3>{t("visible_platforms")}</h3>
@@ -231,6 +236,8 @@ const Settings: Component = () => {
           />
         </div>
       </div>
+
+      <SafetyPanel />
 
       <div class="settings-panel">
         <h3>{t("notifications_panel_title")}</h3>
@@ -439,6 +446,18 @@ const Settings: Component = () => {
                 </div>
               )}
             </For>
+          </div>
+        </div>
+      </Show>
+
+      <DependenciesPanel />
+    </div>
+  );
+};
+
+export default Settings;
+
+
           </div>
         </div>
       </Show>
