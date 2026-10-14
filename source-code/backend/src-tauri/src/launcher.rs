@@ -6,8 +6,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::stores::{self, Platform};
 use crate::state::AppState;
+use crate::util::LockExt;
 
 const LAUNCH_COOLDOWN: Duration = Duration::from_secs(10);
+
+/// Funkcja odpytująca źródło prawdy o aktualnie działającej grze Steam:
+/// `None` = błąd/brak danych (ignorowany), `Some(None)` = nic nie działa,
+/// `Some(Some(appid))` = działa gra o tym AppID.
+type SteamPoller = Box<dyn Fn() -> Option<Option<String>> + Send + 'static>;
 
 /// Jak długo czekamy, aż okno nowo uruchomionego procesu (gry/launchera)
 /// pojawi się w `ListWindows` comphwde, żeby je zmaksymalizować - patrz
@@ -22,7 +28,7 @@ const IPC_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Gamescope jako zewnętrzny wrapper procesu) — patrz `apply_gaming_tools`.
 pub fn launch_game(app: AppHandle, state: State<AppState>, platform: Platform, game_id: String) -> Result<(), String> {
     let mut cmd = stores::build_launch_command(platform, &game_id).map_err(|e| e.to_string())?;
-    let settings = state.settings.lock().unwrap();
+    let settings = state.settings.lock_safe();
     let gaming_tools = settings.gaming_tools.clone();
     // Mapowanie kontrolera per gra (patrz moduł-dokumentacja
     // `controllers.rs`) — wstrzyknięte TYLKO gdy użytkownik jawnie
@@ -173,7 +179,7 @@ pub fn install_game(app: AppHandle, platform: Platform, game_id: String) -> Resu
 /// powiadomień, tylko ostrożnie je pokazywać.
 fn notifications_enabled_for(app: &AppHandle, get: impl Fn(&crate::settings::NotificationSettings) -> bool) -> bool {
     app.try_state::<AppState>()
-        .map(|state| get(&state.settings.lock().unwrap().notifications))
+        .map(|state| get(&state.settings.lock_safe().notifications))
         .unwrap_or(true)
 }
 
@@ -352,7 +358,7 @@ fn run_wrapped(
         std::sync::OnceLock::new();
     let map = LAST_LAUNCH.get_or_init(|| std::sync::Mutex::new(Default::default()));
     {
-        let mut guard = map.lock().unwrap();
+        let mut guard = map.lock_safe();
         if let Some(last) = guard.get(&label) {
             if last.elapsed() < LAUNCH_COOLDOWN {
                 return Err(format!(
@@ -363,7 +369,7 @@ fn run_wrapped(
         guard.insert(label.clone(), Instant::now());
     }
 
-    let wrapper_enabled = state.settings.lock().unwrap().wrapper_mode_enabled;
+    let wrapper_enabled = state.settings.lock_safe().wrapper_mode_enabled;
     let is_dev = state.is_dev();
 
     // Poświadczenia Steam Web API — pobrane TERAZ (razem z resztą ustawień
@@ -371,25 +377,61 @@ fn run_wrapped(
     // `State<AppState>` nie przenosi się do `std::thread::spawn`. `Some(...)`
     // TYLKO dla uruchomień konkretnej gry Steam (`platform_slug == "steam"`)
     // Z ustawionym kluczem API i SteamID64 — patrz
-    // `watch_steam_web_api_session` po pełne wyjaśnienie, dlaczego Steam
+    // `watch_steam_session` po pełne wyjaśnienie, dlaczego Steam
     // wymaga zupełnie innego mechanizmu śledzenia niż pozostałe platformy.
     let steam_web_api_creds: Option<(String, String, String)> = playtime_key
         .as_ref()
         .filter(|(platform_slug, _)| platform_slug == "steam")
         .and_then(|(_, game_id)| {
-            let settings = state.settings.lock().unwrap();
+            let settings = state.settings.lock_safe();
             let api_key = settings.steam_api_key.clone().filter(|k| !k.trim().is_empty())?;
             let steam_id64 = settings.steam_id64.clone().filter(|k| !k.trim().is_empty())?;
             Some((game_id.clone(), api_key, steam_id64))
         });
+
+    // Źródło prawdy o tym, czy gra Steam faktycznie działa. Preferujemy
+    // LOKALNY odczyt `RunningAppID` z `registry.vdf` (działa bez klucza API
+    // i bez sieci, odpowiada szybciej); gdy pliku nie ma - Steam Web API (o
+    // ile skonfigurowano klucz). Brak obu = stare zachowanie (PID procesu
+    // `steam -applaunch`, patrz komentarz w gałęzi `else` niżej).
+    let steam_watch: Option<(String, SteamPoller, bool)> = playtime_key
+        .as_ref()
+        .filter(|(platform_slug, _)| platform_slug == "steam")
+        .and_then(|(_, game_id)| {
+            if stores::steam::local_running_appid().is_some() {
+                let poller: SteamPoller = Box::new(stores::steam::local_running_appid);
+                Some((game_id.clone(), poller, true))
+            } else if let Some((_, api_key, steam_id64)) = steam_web_api_creds.clone() {
+                let poller: SteamPoller =
+                    Box::new(move || stores::steam::fetch_player_current_appid(&api_key, &steam_id64));
+                Some((game_id.clone(), poller, false))
+            } else {
+                None
+            }
+        });
+    let steam_watched = steam_watch.is_some();
 
     // Migawka okien SPRZED odpalenia procesu — comphwde nie ma
     // dedykowanego "WrapperModeEnter/Exit" jak dawny własny kompozytor;
     // zamiast tego chowamy własne okno powłoki i po prostu wypatrujemy,
     // które okno jest NOWE względem tej migawki, żeby je zmaksymalizować.
     // Patrz `hacker_mode_ipc::maximize_next_new_window`.
-    let known_windows = if wrapper_enabled && !is_dev {
-        hacker_mode_ipc::known_window_ids(IPC_CALL_TIMEOUT).unwrap_or_default()
+    let compositor = crate::compositor::active();
+    // `Some(guard)` tylko, gdy żadne inne uruchomienie nie czeka właśnie na
+    // swoje okno - patrz `compositor::try_begin_maximize`. Dla labwc
+    // maksymalizacją zajmuje się reguła w rc.xml, więc guard nie jest
+    // potrzebny.
+    let maximize_guard = if wrapper_enabled && !is_dev && compositor == crate::compositor::Compositor::Comphwde {
+        let guard = crate::compositor::try_begin_maximize();
+        if guard.is_none() {
+            tracing::warn!("Inne uruchomienie czeka jeszcze na swoje okno - pomijam automatyczną maksymalizację dla tego");
+        }
+        guard
+    } else {
+        None
+    };
+    let known_windows = if wrapper_enabled && !is_dev && maximize_guard.is_some() {
+        crate::compositor::snapshot_windows(compositor, IPC_CALL_TIMEOUT)
     } else {
         Vec::new()
     };
@@ -408,7 +450,7 @@ fn run_wrapped(
     // komendy Tauri) — ten sam wzorzec co `gaming_tools`/
     // `game_controller_configs` wyżej w tej funkcji.
     let auto_backup_config = playtime_key.as_ref().and_then(|(platform_slug, game_id)| {
-        let settings = state.settings.lock().unwrap();
+        let settings = state.settings.lock_safe();
         let backup_root = settings.cloud_saves_backup_dir.clone()?;
         let save_path = settings.game_save_paths.get(&format!("{platform_slug}:{game_id}"))?.clone();
         Some((backup_root, save_path))
@@ -434,7 +476,7 @@ fn run_wrapped(
     // nie samej gry).
     if let Some((platform_slug, game_id)) = &playtime_key {
         let key = format!("{platform_slug}:{game_id}");
-        state.running_games.lock().unwrap().insert(key, child.id());
+        state.running_games.lock_safe().insert(key, child.id());
         let _ = app.emit(
             "hacker-mode://game-launched",
             serde_json::json!({ "platform": platform_slug, "gameId": game_id, "label": label }),
@@ -442,30 +484,34 @@ fn run_wrapped(
     }
 
     // Watcher Steam Web API — patrz `steam_web_api_creds` wyżej i
-    // moduł-dokumentacja `watch_steam_web_api_session`. Uruchomiony
+    // moduł-dokumentacja `watch_steam_session`. Uruchomiony
     // NIEZALEŻNIE od wątku niżej czekającego na `child.wait()` (który dla
     // Steam obserwuje tylko krótkotrwały proces `steam -applaunch`, nie
     // samą grę) — to ten watcher, nie ten wątek, doliczy czas gry i
     // wyemituje zdarzenia `game-exited`/powiadomienie o możliwym crashu
     // dla uruchomień Steam z skonfigurowanymi poświadczeniami API.
-    if let Some((appid, api_key, steam_id64)) = steam_web_api_creds.clone() {
+    if let Some((appid, poller, local)) = steam_watch {
         let app_for_watcher = app.clone();
         let label_for_watcher = label.clone();
         std::thread::spawn(move || {
-            watch_steam_web_api_session(app_for_watcher, appid, label_for_watcher, api_key, steam_id64);
+            watch_steam_session(app_for_watcher, appid, label_for_watcher, poller, local);
         });
     }
 
     let app_for_thread = app.clone();
     let wrapper_enabled_for_thread = wrapper_enabled && !is_dev;
 
-    if wrapper_enabled_for_thread {
+    if let (true, Some(guard)) = (wrapper_enabled_for_thread, maximize_guard) {
         // Osobny wątek: czeka aż nowe okno gry/launchera pojawi się w
         // comphwde i maksymalizuje je. Nie blokuje ani UI, ani wątku
-        // czekającego na zakończenie procesu poniżej.
+        // czekającego na zakończenie procesu poniżej. `guard` żyje do
+        // końca czekania (zwolnienie = kolejne uruchomienie może dostać
+        // własną asystę).
         std::thread::spawn(move || {
-            match hacker_mode_ipc::maximize_next_new_window(&known_windows, NEW_WINDOW_TIMEOUT, NEW_WINDOW_POLL_INTERVAL) {
-                Ok(id) => tracing::info!(window_id = id, "Nowe okno zmaksymalizowane (tryb wrapper)"),
+            let _guard = guard;
+            match crate::compositor::maximize_new_window(compositor, &known_windows, NEW_WINDOW_TIMEOUT, NEW_WINDOW_POLL_INTERVAL) {
+                Ok(Some(id)) => tracing::info!(window_id = id, "Nowe okno zmaksymalizowane (tryb wrapper)"),
+                Ok(None) => {}
                 Err(e) => tracing::debug!(error = %e, "Nie doczekano się nowego okna do zmaksymalizowania"),
             }
         });
@@ -485,10 +531,10 @@ fn run_wrapped(
             // zawsze poprawne, niezależnie od gałęzi niżej.
             if let Some(app_state) = app_for_thread.try_state::<AppState>() {
                 let key = format!("{platform_slug}:{game_id}");
-                app_state.running_games.lock().unwrap().remove(&key);
+                app_state.running_games.lock_safe().remove(&key);
             }
 
-            if steam_web_api_creds.is_none() {
+            if !steam_watched {
                 // Ścieżka dla WSZYSTKICH platform poza Steam-z-kluczem-API:
                 // tu `child.wait()` obserwuje realny proces gry (albo,
                 // dla samego Steam bez skonfigurowanych poświadczeń API,
@@ -531,7 +577,7 @@ fn run_wrapped(
                 // `GameDetail.tsx` z tego samego obiektu `Settings`).
                 let crash_threshold = app_for_thread
                     .try_state::<AppState>()
-                    .map(|s| s.settings.lock().unwrap().crash_detection_threshold_seconds)
+                    .map(|s| s.settings.lock_safe().crash_detection_threshold_seconds)
                     .unwrap_or(8);
                 if (!ok || seconds_ran < crash_threshold) && notifications_enabled_for(&app_for_thread, |n| n.on_game_exit) {
                     crate::notifications::error(
@@ -546,11 +592,11 @@ fn run_wrapped(
                 // sekundy, gdy Steam już działał — to OCZEKIWANE, nie
                 // dowód awarii. Właściwe śledzenie (doliczenie czasu gry,
                 // zdarzenie `game-exited`, ewentualne powiadomienie o
-                // crashu) przejmuje `watch_steam_web_api_session`
+                // crashu) przejmuje `watch_steam_session`
                 // (uruchomiony wcześniej w tej funkcji), które mierzy
                 // REALNY czas trwania sesji przez Steam Web API zamiast
                 // czasu życia tego procesu-pośrednika.
-                tracing::debug!(label = %label, "Steam -applaunch zakończone — śledzenie sesji przejęte przez watcher Steam Web API");
+                tracing::debug!(label = %label, "Steam -applaunch zakończone — śledzenie sesji przejęte przez watcher Steam (rejestr lokalny / Web API)");
             }
         }
 
@@ -612,7 +658,7 @@ fn run_wrapped(
 ///    zaczęło zwracać `true`) i odpytujemy rzadziej
 ///    (`POLL_INTERVAL_RUNNING`, żeby niepotrzebnie nie zużywać limitu
 ///    zapytań Steam Web API), aż `gameid` przestanie być równe `appid` —
-///    wtedy sesja się skończyła, patrz `finish_steam_web_api_session`.
+///    wtedy sesja się skończyła, patrz `finish_steam_session`.
 ///
 /// Pojedynczy NIEUDANY poll (błąd sieci/API, patrz `Option<Option<_>>`
 /// w `fetch_player_current_appid`) jest CELOWO ignorowany, nie
@@ -622,10 +668,16 @@ fn run_wrapped(
 /// jakiegoś powodu Steam Web API w kółko zwracało ten sam `appid` mimo
 /// realnego zamknięcia gry (np. przez wiele godzin bezczynności klienta
 /// Steam) — zapobiega wątkowi działającemu w nieskończoność.
-fn watch_steam_web_api_session(app: AppHandle, appid: String, label: String, api_key: String, steam_id64: String) {
+fn watch_steam_session(app: AppHandle, appid: String, label: String, poll: SteamPoller, local: bool) {
     const LAUNCH_GRACE_PERIOD: Duration = Duration::from_secs(90);
-    const POLL_INTERVAL_WAITING: Duration = Duration::from_secs(5);
-    const POLL_INTERVAL_RUNNING: Duration = Duration::from_secs(20);
+    // Odczyt lokalnego pliku jest darmowy (bez limitu zapytań), więc
+    // odpytujemy go częściej niż Web API.
+    let (poll_waiting, poll_running) = if local {
+        (Duration::from_secs(2), Duration::from_secs(5))
+    } else {
+        (Duration::from_secs(5), Duration::from_secs(20))
+    };
+    let source = if local { "lokalnego rejestru Steam" } else { "Steam Web API" };
     const MAX_SESSION_DURATION: Duration = Duration::from_secs(60 * 60 * 24);
 
     let key = format!("steam:{appid}");
@@ -636,7 +688,7 @@ fn watch_steam_web_api_session(app: AppHandle, appid: String, label: String, api
         if let Some(started_at) = confirmed_started_at {
             if started_at.elapsed() > MAX_SESSION_DURATION {
                 tracing::warn!(appid = %appid, "Przekroczono maksymalny czas obserwacji sesji Steam przez Web API — kończę jako zabezpieczenie");
-                finish_steam_web_api_session(&app, &appid, &label, &key, started_at.elapsed().as_secs());
+                finish_steam_session(&app, &appid, &label, &key, started_at.elapsed().as_secs(), source);
                 return;
             }
         } else if launch_attempt_started.elapsed() > LAUNCH_GRACE_PERIOD {
@@ -644,19 +696,19 @@ fn watch_steam_web_api_session(app: AppHandle, appid: String, label: String, api
             if notifications_enabled_for(&app, |n| n.on_game_exit) {
                 crate::notifications::error(
                     "Gra mogła się nie uruchomić poprawnie",
-                    &format!("{label}: Steam Web API nie potwierdziło uruchomienia gry w ciągu {}s", LAUNCH_GRACE_PERIOD.as_secs()),
+                    &format!("{label}: {source} nie potwierdził(o) uruchomienia gry w ciągu {}s", LAUNCH_GRACE_PERIOD.as_secs()),
                 );
             }
             let _ = app.emit("hacker-mode://app-closed", serde_json::json!({ "label": label }));
             return;
         }
 
-        match crate::commands::stores::steam::fetch_player_current_appid(&api_key, &steam_id64) {
+        match poll() {
             Some(Some(current_appid)) if current_appid == appid => {
                 if confirmed_started_at.is_none() {
                     confirmed_started_at = Some(Instant::now());
                     if let Some(app_state) = app.try_state::<AppState>() {
-                        app_state.steam_watched_games.lock().unwrap().insert(key.clone());
+                        app_state.steam_watched_games.lock_safe().insert(key.clone());
                     }
                     tracing::info!(appid = %appid, "Steam Web API potwierdziło uruchomienie gry");
                 }
@@ -668,7 +720,7 @@ fn watch_steam_web_api_session(app: AppHandle, appid: String, label: String, api
                 // Jeśli jeszcze nie potwierdziliśmy — wciąż jesteśmy w
                 // oknie startowym, próbujemy dalej aż do `LAUNCH_GRACE_PERIOD`.
                 if let Some(started_at) = confirmed_started_at {
-                    finish_steam_web_api_session(&app, &appid, &label, &key, started_at.elapsed().as_secs());
+                    finish_steam_session(&app, &appid, &label, &key, started_at.elapsed().as_secs(), source);
                     return;
                 }
             }
@@ -679,11 +731,11 @@ fn watch_steam_web_api_session(app: AppHandle, appid: String, label: String, api
             }
         }
 
-        std::thread::sleep(if confirmed_started_at.is_some() { POLL_INTERVAL_RUNNING } else { POLL_INTERVAL_WAITING });
+        std::thread::sleep(if confirmed_started_at.is_some() { poll_running } else { poll_waiting });
     }
 }
 
-/// Kończy sesję śledzoną przez `watch_steam_web_api_session`: dolicza
+/// Kończy sesję śledzoną przez `watch_steam_session`: dolicza
 /// zmierzony (przez Steam Web API, nie przez czas życia procesu
 /// `steam -applaunch`) czas gry, usuwa grę z
 /// `AppState::steam_watched_games` i emituje te same zdarzenia
@@ -691,13 +743,13 @@ fn watch_steam_web_api_session(app: AppHandle, appid: String, label: String, api
 /// standardowa ścieżka PID-owa w `run_wrapped` — więc z punktu widzenia
 /// frontendu (`GameDetail.tsx`/`GameCard.tsx`) obie ścieżki wyglądają
 /// identycznie, tylko źródło `secondsRan` jest inne (i dokładniejsze).
-fn finish_steam_web_api_session(app: &AppHandle, appid: &str, label: &str, key: &str, seconds_ran: u64) {
+fn finish_steam_session(app: &AppHandle, appid: &str, label: &str, key: &str, seconds_ran: u64, source: &str) {
     let minutes = seconds_ran / 60;
     crate::playtime::add_minutes("steam", appid, minutes);
     crate::playtime::record_session("steam", appid, minutes);
 
     if let Some(app_state) = app.try_state::<AppState>() {
-        app_state.steam_watched_games.lock().unwrap().remove(key);
+        app_state.steam_watched_games.lock_safe().remove(key);
     }
 
     let _ = app.emit(
@@ -714,12 +766,12 @@ fn finish_steam_web_api_session(app: &AppHandle, appid: &str, label: &str, key: 
 
     let crash_threshold = app
         .try_state::<AppState>()
-        .map(|s| s.settings.lock().unwrap().crash_detection_threshold_seconds)
+        .map(|s| s.settings.lock_safe().crash_detection_threshold_seconds)
         .unwrap_or(8);
     if seconds_ran < crash_threshold && notifications_enabled_for(app, |n| n.on_game_exit) {
         crate::notifications::error(
             "Gra mogła się nie uruchomić poprawnie",
-            &format!("{label} zamknęła się po {seconds_ran}s (wg Steam Web API)"),
+            &format!("{label} zamknęła się po {seconds_ran}s (wg {source})"),
         );
     }
 }
@@ -729,13 +781,11 @@ fn enter_wrapper_mode(app: &AppHandle, state: &State<AppState>) {
     if let Some(win) = app.get_webview_window("shell") {
         let _ = win.hide();
     }
-    // Chowamy też po stronie comphwde (nie tylko po stronie Tauri) —
-    // patrz `enter_wrapper`'s doc comment: to `MinimizeWindow` na naszym
-    // własnym oknie znalezionym po `SHELL_APP_ID`, ten sam prymityw,
-    // którego comphwde już używa dla SDE.
-    if let Err(e) = hacker_mode_ipc::enter_wrapper(IPC_CALL_TIMEOUT) {
-        tracing::debug!(error = %e, "comphwde niedostępne przez IPC lub nie znaleziono własnego okna (pomijam)");
-    }
+    // Chowamy też po stronie kompozytora (nie tylko po stronie Tauri) —
+    // dla comphwde to `MinimizeWindow` na naszym własnym oknie znalezionym
+    // po `SHELL_APP_ID`; dla labwc nic więcej nie trzeba (patrz
+    // `compositor.rs`).
+    crate::compositor::enter_wrapper(crate::compositor::active(), IPC_CALL_TIMEOUT);
 }
 
 fn exit_wrapper_mode(app: &AppHandle) {
@@ -746,9 +796,7 @@ fn exit_wrapper_mode(app: &AppHandle) {
         let _ = win.show();
         let _ = win.set_focus();
     }
-    if let Err(e) = hacker_mode_ipc::exit_wrapper(IPC_CALL_TIMEOUT) {
-        tracing::debug!(error = %e, "comphwde niedostępne przez IPC lub nie znaleziono własnego okna (pomijam)");
-    }
+    crate::compositor::exit_wrapper(crate::compositor::active(), IPC_CALL_TIMEOUT);
 }
 
 /// Zamyka wszystkie znane procesy launcherów/sklepów (odpowiednik
@@ -793,8 +841,8 @@ pub struct ActionSummary {
 /// historii, nowy listener nie widzi zdarzeń sprzed jego rejestracji).
 pub fn is_game_running(state: &State<AppState>, platform: Platform, game_id: &str) -> bool {
     let key = format!("{}:{game_id}", platform.slug());
-    state.running_games.lock().unwrap().contains_key(&key)
-        || state.steam_watched_games.lock().unwrap().contains(&key)
+    state.running_games.lock_safe().contains_key(&key)
+        || state.steam_watched_games.lock_safe().contains(&key)
 }
 
 /// Zatrzymuje uruchomioną grę, wysyłając sygnał do zarejestrowanego PID-u
@@ -820,8 +868,7 @@ pub fn stop_game(state: &State<AppState>, platform: Platform, game_id: &str, for
     let key = format!("{}:{game_id}", platform.slug());
     let pid = state
         .running_games
-        .lock()
-        .unwrap()
+        .lock_safe()
         .get(&key)
         .copied()
         .ok_or("Ta gra nie jest aktualnie uruchomiona (albo Hacker Mode stracił jej ślad — patrz ograniczenie dla Steam)")?;
