@@ -1,6 +1,39 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Kompozytor Wayland, na którym działa sesja Hacker Mode.
+///
+/// Domyślnie `labwc` (dojrzały kompozytor wlroots z natywnym backendem
+/// DRM/KMS, więc sesja działa także z gołego TTY). `comphwde` (projekt
+/// HWDE, sterowany przez IPC) włącza się przez `"compositor": "comphwde"`
+/// w `~/.config/Hacker-Mode/config.json` albo zmienną środowiskową
+/// `HACKER_MODE_COMPOSITOR`. Wartość czyta `scripts/hacker-mode-session`
+/// PRZED startem sesji - zmiana wymaga ponownego zalogowania.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Compositor {
+    #[default]
+    Labwc,
+    Comphwde,
+}
+
+impl Compositor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Compositor::Labwc => "labwc",
+            Compositor::Comphwde => "comphwde",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "labwc" => Some(Compositor::Labwc),
+            "comphwde" => Some(Compositor::Comphwde),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GamingTools {
@@ -20,7 +53,11 @@ impl Default for GamingTools {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
+    /// Kompozytor sesji - patrz [`Compositor`]. Pole jest częścią tego
+    /// samego pliku `config.json` co reszta ustawień.
+    pub compositor: Compositor,
     pub language: String,
     pub theme: String,
     /// Odpowiednik zachowania z wersji 0.1: uruchomienie zewnętrznej
@@ -140,6 +177,19 @@ pub struct Settings {
     /// trzymać własną kopię liczby.
     #[serde(default = "default_crash_detection_threshold_seconds")]
     pub crash_detection_threshold_seconds: u64,
+    /// Domyślnie `false`: Hacker Mode ODMAWIA modyfikacji plików
+    /// konfiguracyjnych Steama/Lutrisa (`config.vdf`, YAML gry), gdy dany
+    /// klient działa - Steam i tak nadpisze plik przy zamknięciu, a
+    /// równoległy zapis grozi jego uszkodzeniem. Ustaw `true`, jeśli
+    /// świadomie chcesz zapisywać mimo to.
+    #[serde(default)]
+    pub allow_config_write_while_running: bool,
+    /// Domyślnie `false`: odinstalowanie gry Lutrisa tylko oznacza wpis w
+    /// `pga.db` jako niezainstalowany. `true` dodatkowo kasuje katalog gry
+    /// (tylko jeśli leży w bezpiecznej lokalizacji - patrz
+    /// `commands/stores/lutris.rs`).
+    #[serde(default)]
+    pub lutris_delete_files_on_uninstall: bool,
 }
 
 fn default_crash_detection_threshold_seconds() -> u64 {
@@ -177,6 +227,7 @@ impl Default for NotificationSettings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            compositor: Compositor::default(),
             language: default_language(),
             theme: "dark".into(),
             wrapper_mode_enabled: true,
@@ -204,6 +255,8 @@ impl Default for Settings {
             custom_launch_prefix: None,
             notifications: NotificationSettings::default(),
             crash_detection_threshold_seconds: default_crash_detection_threshold_seconds(),
+            allow_config_write_while_running: false,
+            lutris_delete_files_on_uninstall: false,
         }
     }
 }
@@ -216,32 +269,165 @@ fn default_language() -> String {
         .unwrap_or_else(|| "en".to_string())
 }
 
-fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("hacker-mode")
-        .join("config.json")
+fn config_root() -> PathBuf {
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `~/.config/Hacker-Mode/config.json` (od v1.1).
+pub fn config_path() -> PathBuf {
+    config_root().join("Hacker-Mode").join("config.json")
+}
+
+/// `~/.config/hacker-mode/config.json` - lokalizacja sprzed v1.1; czytana
+/// tylko jednorazowo przy migracji.
+fn legacy_config_path() -> PathBuf {
+    config_root().join("hacker-mode").join("config.json")
 }
 
 impl Settings {
+    /// Wczytuje ustawienia z `~/.config/Hacker-Mode/config.json`; jeśli go
+    /// nie ma, a istnieje stary plik z `~/.config/hacker-mode/`, migruje go
+    /// (stary zostaje nietknięty). Uszkodzony plik NIE jest po cichu
+    /// nadpisywany: najpierw trafia do `config.json.corrupt-<unix-time>`.
     pub fn load_or_default() -> Self {
-        let path = config_path();
-        match std::fs::read_to_string(&path) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|err| {
-                tracing::warn!(%err, "Nieprawidłowy config.json, używam ustawień domyślnych");
+        Self::load_from(&config_path(), Some(&legacy_config_path()))
+    }
+
+    pub fn load_from(path: &Path, legacy: Option<&Path>) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match serde_json::from_str::<Settings>(&content) {
+                Ok(settings) => settings,
+                Err(err) => {
+                    tracing::warn!(%err, "Nieprawidłowy config.json, używam ustawień domyślnych (oryginał zachowany w kopii)");
+                    Self::quarantine_corrupt(path);
+                    Settings::default()
+                }
+            },
+            Err(_) => {
+                if let Some(legacy_path) = legacy {
+                    if let Ok(content) = std::fs::read_to_string(legacy_path) {
+                        if let Ok(migrated) = serde_json::from_str::<Settings>(&content) {
+                            tracing::info!(from = %legacy_path.display(), to = %path.display(), "Migracja ustawień do nowej lokalizacji");
+                            if let Err(err) = migrated.save_to(path) {
+                                tracing::warn!(%err, "Nie udało się zapisać zmigrowanych ustawień");
+                            }
+                            return migrated;
+                        }
+                    }
+                }
                 Settings::default()
-            }),
-            Err(_) => Settings::default(),
+            }
+        }
+    }
+
+    fn quarantine_corrupt(path: &Path) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(format!(".corrupt-{stamp}"));
+        if let Err(err) = std::fs::rename(path, PathBuf::from(backup)) {
+            tracing::warn!(%err, "Nie udało się zachować uszkodzonego config.json");
         }
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
-        let path = config_path();
+        self.save_to(&config_path())
+    }
+
+    /// Zapis atomowy (plik tymczasowy + `rename`) z uprawnieniami `0600`
+    /// (plik zawiera klucze API) w katalogu `0700`.
+    pub fn save_to(&self, path: &Path) -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
         }
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)?;
+        crate::util::write_atomic(path, json.as_bytes(), Some(0o600))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_compositor_is_labwc() {
+        assert_eq!(Settings::default().compositor, Compositor::Labwc);
+        assert_eq!(Compositor::default().as_str(), "labwc");
+    }
+
+    #[test]
+    fn compositor_parses_and_serializes_lowercase() {
+        assert_eq!(Compositor::parse("COMPHWDE"), Some(Compositor::Comphwde));
+        assert_eq!(Compositor::parse("sway"), None);
+        let json = serde_json::to_string(&Compositor::Comphwde).unwrap();
+        assert_eq!(json, "\"comphwde\"");
+    }
+
+    #[test]
+    fn partial_config_keeps_defaults_instead_of_failing() {
+        // Plik zawiera tylko jedno pole - reszta musi dostać wartości domyślne
+        // (wcześniej brak np. `language` unieważniał CAŁY plik).
+        let s: Settings = serde_json::from_str(r#"{"compositor":"comphwde","theme":"light"}"#).unwrap();
+        assert_eq!(s.compositor, Compositor::Comphwde);
+        assert_eq!(s.theme, "light");
+        assert_eq!(s.crash_detection_threshold_seconds, 8);
+        assert!(s.wrapper_mode_enabled);
+    }
+
+    #[test]
+    fn save_and_load_roundtrip_with_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Hacker-Mode").join("config.json");
+        let mut s = Settings::default();
+        s.compositor = Compositor::Comphwde;
+        s.steam_api_key = Some("SECRET".into());
+        s.save_to(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config z kluczami API musi być prywatny");
+        let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+
+        let loaded = Settings::load_from(&path, None);
+        assert_eq!(loaded.compositor, Compositor::Comphwde);
+        assert_eq!(loaded.steam_api_key.as_deref(), Some("SECRET"));
+    }
+
+    #[test]
+    fn legacy_config_is_migrated_and_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("hacker-mode").join("config.json");
+        let new = dir.path().join("Hacker-Mode").join("config.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, r#"{"theme":"light"}"#).unwrap();
+
+        let loaded = Settings::load_from(&new, Some(&legacy));
+        assert_eq!(loaded.theme, "light");
+        assert!(new.exists(), "zmigrowany plik powinien zostać zapisany w nowej lokalizacji");
+        assert!(legacy.exists(), "stary plik nie może być usunięty");
+        // Drugi odczyt korzysta już z nowego pliku.
+        assert_eq!(Settings::load_from(&new, None).theme, "light");
+    }
+
+    #[test]
+    fn corrupt_config_is_quarantined_not_destroyed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(&path, "{ to nie jest json").unwrap();
+        let loaded = Settings::load_from(&path, None);
+        assert_eq!(loaded.theme, "dark");
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains("config.json.corrupt-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), "{ to nie jest json");
     }
 }
