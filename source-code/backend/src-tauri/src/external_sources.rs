@@ -89,8 +89,14 @@ fn game_from_value(g: &serde_json::Value) -> Option<ExternalApp> {
     Some(ExternalApp { source: "Heroic (sideload)".to_string(), name })
 }
 
-fn bottles_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_default().join("bottles/bottles")
+/// Katalogi z butelkami Bottles: instalacja natywna i Flatpak (najpopularniejsza
+/// dystrybucja Bottles - wcześniej pomijana).
+fn bottles_dirs() -> Vec<PathBuf> {
+    let mut dirs_list = vec![dirs::data_dir().unwrap_or_default().join("bottles/bottles")];
+    if let Some(home) = dirs::home_dir() {
+        dirs_list.push(home.join(".var/app/com.usebottles.bottles/data/bottles/bottles"));
+    }
+    dirs_list
 }
 
 /// Pola `bottle.yml`, których nazwy udało się potwierdzić researchem —
@@ -128,6 +134,11 @@ struct BottleInfo {
 fn parse_bottle_yml(content: &str) -> BottleInfo {
     let mut info = BottleInfo::default();
     for line in content.lines() {
+        // Tylko klucze NAJWYŻSZEGO poziomu (bez wcięcia) - zagnieżdżone
+        // wpisy (np. programy zewnętrzne) nie mogą nadpisać nazwy butelki.
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("Name:") {
             let value = value.trim().trim_matches('"').trim_matches('\'');
@@ -144,6 +155,36 @@ fn parse_bottle_yml(content: &str) -> BottleInfo {
     info
 }
 
+/// Nazwy programów dodanych ręcznie do butelki (sekcja `External_Programs:`
+/// w `bottle.yml`; każdy wpis ma pole `name`). Schemat odtworzony z kodu
+/// Bottles, NIEpotwierdzony na żywej instalacji - dlatego parser jest
+/// tolerancyjny (brak sekcji / inny kształt = pusta lista, nigdy błąd), a
+/// `hacker-mode doctor` pokazuje, ile programów faktycznie rozpoznano.
+fn parse_external_programs(content: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_section = false;
+    for line in content.lines() {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let indented = line.starts_with(char::is_whitespace);
+        if !indented {
+            in_section = line.trim_end() == "External_Programs:";
+            continue;
+        }
+        if in_section {
+            let trimmed = line.trim();
+            if let Some(value) = trimmed.strip_prefix("name:") {
+                let value = value.trim().trim_matches('"').trim_matches('\'');
+                if !value.is_empty() {
+                    names.push(value.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
 /// Nazwy wykrytych "bottle'i" (prefiksów Wine zarządzanych przez
 /// Bottles) — od tej rundy wzbogacone (best-effort, patrz
 /// `parse_bottle_yml`) o nazwę z `bottle.yml` (jeśli różni się od nazwy
@@ -152,22 +193,17 @@ fn parse_bottle_yml(content: &str) -> BottleInfo {
 /// zmieniać kształtu odpowiedzi API konsumowanego przez frontend w tej
 /// samej rundzie co samą logikę wykrywania).
 pub fn list_bottles() -> Vec<ExternalApp> {
-    let Ok(entries) = std::fs::read_dir(bottles_dir()) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| {
-            let bottle_yml_path = e.path().join("bottle.yml");
-            let dir_name = e.file_name().to_string_lossy().into_owned();
+    let mut apps = Vec::new();
+    for dir in bottles_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten().filter(|e| e.path().is_dir()) {
+            let bottle_yml_path = entry.path().join("bottle.yml");
+            let dir_name = entry.file_name().to_string_lossy().into_owned();
             if !bottle_yml_path.is_file() {
-                return None;
+                continue;
             }
-
-            let info = std::fs::read_to_string(&bottle_yml_path)
-                .map(|content| parse_bottle_yml(&content))
-                .unwrap_or_default();
+            let content = std::fs::read_to_string(&bottle_yml_path).unwrap_or_default();
+            let info = parse_bottle_yml(&content);
 
             let display_name = match info.name.filter(|n| n != &dir_name) {
                 Some(name) => format!("{name} ({dir_name})"),
@@ -175,12 +211,16 @@ pub fn list_bottles() -> Vec<ExternalApp> {
             };
             let name = match info.runner {
                 Some(runner) => format!("{display_name} — {runner}"),
-                None => display_name,
+                None => display_name.clone(),
             };
+            apps.push(ExternalApp { source: "Bottles".to_string(), name });
 
-            Some(ExternalApp { source: "Bottles".to_string(), name })
-        })
-        .collect()
+            for program in parse_external_programs(&content) {
+                apps.push(ExternalApp { source: "Bottles".to_string(), name: format!("{program} [{display_name}]") });
+            }
+        }
+    }
+    apps
 }
 
 /// Wszystko naraz — patrz `commands::list_external_apps`.
@@ -192,6 +232,17 @@ pub fn list_all() -> Vec<ExternalApp> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bottle_yml_top_level_keys_only_and_external_programs() {
+        let yml = "Name: Gry\nRunner: soda-9.0-1\nExternal_Programs:\n  abc123:\n    name: Battle.net\n    Name: nie-ta\n    path: C:/x\n  def:\n    name: 'EA app'\nParameters:\n  dxvk: true\n";
+        let info = super::parse_bottle_yml(yml);
+        assert_eq!(info.name.as_deref(), Some("Gry"));
+        assert_eq!(info.runner.as_deref(), Some("soda-9.0-1"));
+        assert_eq!(super::parse_external_programs(yml), vec!["Battle.net", "EA app"]);
+        assert!(super::parse_external_programs("Name: x\n").is_empty());
+        assert!(super::parse_external_programs("External_Programs: {}\n").is_empty());
+    }
+
     use super::*;
 
     #[test]
