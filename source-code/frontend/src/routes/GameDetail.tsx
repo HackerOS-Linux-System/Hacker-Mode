@@ -4,22 +4,20 @@ import {
   api,
   resolveCoverSrc,
   PLATFORM_LABELS,
-  PROTONDB_SUPPORTED_PLATFORMS,
-  PROTONDB_TIER_INFO,
-  COMPAT_TOOL_SUPPORTED_PLATFORMS,
   RELIABLE_RUNNING_STATE_PLATFORMS,
   type GameDetails,
   type Platform,
-  type ProtonDbSummary,
-  type Achievement,
-  type CompatToolOptions,
   type BackupEntry,
   type ConnectedController,
-  type SessionEntry,
 } from "@/lib/tauri";
 import { gamesStore } from "@/stores/gamesStore";
 import { settingsStore } from "@/stores/settingsStore";
 import { getText } from "@/i18n";
+import ProtonDbBadge from "@/components/game-detail/ProtonDbBadge";
+import GameTags from "@/components/game-detail/GameTags";
+import CompatToolPanel from "@/components/game-detail/CompatToolPanel";
+import AchievementsPanel from "@/components/game-detail/AchievementsPanel";
+import SessionHistoryPanel from "@/components/game-detail/SessionHistoryPanel";
 import { IconDownload, IconPlay, IconTrash, IconBack } from "@/components/Icons";
 
 /** Platformy, dla których Hacker Mode potrafi zbudować komendę
@@ -68,31 +66,8 @@ const GameDetail: Component = () => {
   // per platforma), więc jeden klik nigdy nie powinien wystarczyć.
   const [confirmingUninstall, setConfirmingUninstall] = createSignal(false);
 
-  // ProtonDB (Steam) — patrz `PROTONDB_SUPPORTED_PLATFORMS`.
-  const [protondb, setProtondb] = createSignal<ProtonDbSummary | null>(null);
-  const [protondbLoading, setProtondbLoading] = createSignal(false);
-
-  // Osiągnięcia Steam — puste, dopóki nie skonfigurowano klucza API
-  // (patrz Ustawienia → Steam), wtedy sekcja po prostu się nie pokazuje.
-  const [achievements, setAchievements] = createSignal<Achievement[] | null>(null);
-  const [achievementsLoading, setAchievementsLoading] = createSignal(false);
-
-  // Historia sesji — patrz `playtime::get_session_history`.
-  const [sessionHistory, setSessionHistory] = createSignal<SessionEntry[]>([]);
-
-  // Wersja Proton/Wine (Steam/Lutris) — patrz `COMPAT_TOOL_SUPPORTED_PLATFORMS`.
-  const [compatOptions, setCompatOptions] = createSignal<CompatToolOptions | null>(null);
-  const [compatSaving, setCompatSaving] = createSignal(false);
-  const [compatMessage, setCompatMessage] = createSignal<string | null>(null);
-
-  // Tagi użytkownika (`Settings::game_tags`) — czytane/zapisywane wprost
-  // przez `settingsStore`, nie przez osobny lokalny stan listy: klucz
-  // `tagKey()` zawsze wskazuje na aktualne ustawienia, więc nawigacja
-  // między grami bez przeładowania komponentu (SolidJS reużywa go przy
-  // zmianie parametrów trasy) nie pokazuje "przeterminowanych" tagów.
-  const [tagInput, setTagInput] = createSignal("");
+  /** Klucz `platforma:id` używany w `Settings` (zapisy, mapowania kontrolera, tagi). */
   const tagKey = () => `${params.platform}:${params.id}`;
-  const currentTags = () => settingsStore.settings().game_tags[tagKey()] ?? [];
 
   // Kopie zapasowe zapisu — patrz moduł-dokumentacja `cloud_saves.rs`.
   const [savePathInput, setSavePathInput] = createSignal("");
@@ -182,7 +157,9 @@ const GameDetail: Component = () => {
       return t("uninstall_warning_destructive", { platform: PLATFORM_LABELS[platform] });
     }
     if (platform === "lutris") {
-      return t("uninstall_warning_lutris");
+      return settingsStore.settings().lutris_delete_files_on_uninstall
+        ? t("uninstall_warning_lutris_delete")
+        : t("uninstall_warning_lutris");
     }
     return t("uninstall_warning_generic", { platform: PLATFORM_LABELS[platform] });
   }
@@ -215,49 +192,12 @@ const GameDetail: Component = () => {
     });
 
     try {
-      const result = await api.fetchGameDetails(params.platform, params.id);
+      const result = await api.fetchGameDetails(params.platform, params.id, game()?.title);
       setDetails(result);
     } catch (err) {
       console.warn("Nie udało się pobrać opisu gry:", err);
     } finally {
       setDetailsLoading(false);
-    }
-
-    if (PROTONDB_SUPPORTED_PLATFORMS.includes(params.platform)) {
-      setProtondbLoading(true);
-      try {
-        const appid = Number(params.id);
-        if (!Number.isNaN(appid)) setProtondb(await api.fetchProtondbRating(appid));
-      } catch (err) {
-        console.warn("Nie udało się pobrać oceny ProtonDB:", err);
-      } finally {
-        setProtondbLoading(false);
-      }
-
-      // Osiągnięcia wymagają klucza Steam Web API + SteamID64 (Ustawienia
-      // → Steam) — bez nich `fetch_steam_achievements` i tak zwróci pustą
-      // listę po stronie backendu, ale sprawdzamy tu wcześniej, żeby nie
-      // migać loaderem sekcji, która i tak zaraz okaże się pusta.
-      const s = settingsStore.settings();
-      if (s.steam_api_key && s.steam_id64) {
-        setAchievementsLoading(true);
-        try {
-          const list = await api.fetchSteamAchievements(params.id);
-          setAchievements(list.length > 0 ? list : null);
-        } catch (err) {
-          console.warn("Nie udało się pobrać osiągnięć Steam:", err);
-        } finally {
-          setAchievementsLoading(false);
-        }
-      }
-    }
-
-    if (COMPAT_TOOL_SUPPORTED_PLATFORMS.includes(params.platform)) {
-      try {
-        setCompatOptions(await api.getCompatToolOptions(params.platform, params.id));
-      } catch (err) {
-        console.warn("Nie udało się pobrać opcji Proton/Wine:", err);
-      }
     }
 
     await refreshBackups();
@@ -267,53 +207,7 @@ const GameDetail: Component = () => {
       console.warn("Nie udało się wykryć kontrolerów:", err);
     }
 
-    try {
-      setSessionHistory(await api.getGameSessionHistory(params.platform, params.id));
-    } catch (err) {
-      console.warn("Nie udało się pobrać historii sesji:", err);
-    }
   });
-
-  async function saveCompatTool(value: string) {
-    setCompatSaving(true);
-    setCompatMessage(null);
-    try {
-      // `warning` niepuste = zapis się udał, ale Steam/Lutris był
-      // uruchomiony w trakcie (patrz `compat_tools::set_steam_compat_tool`/
-      // `set_lutris_wine_version`) — pokazujemy to jako ostrzeżenie, nie
-      // błąd, bo zmiana i tak weszła w życie.
-      const warning = await api.setCompatTool(params.platform, params.id, value);
-      setCompatOptions((prev) => (prev ? { ...prev, current: value } : prev));
-      if (warning) setCompatMessage(warning);
-    } catch (err) {
-      setCompatMessage(String(err));
-    } finally {
-      setCompatSaving(false);
-    }
-  }
-
-  async function addTag() {
-    const value = tagInput().trim();
-    if (!value) return;
-    const next = [...new Set([...currentTags(), value])];
-    setTagInput("");
-    try {
-      await api.setGameTags(params.platform, params.id, next);
-      await settingsStore.reload();
-    } catch (err) {
-      console.warn("Nie udało się zapisać tagu:", err);
-    }
-  }
-
-  async function removeTag(tag: string) {
-    const next = currentTags().filter((t) => t !== tag);
-    try {
-      await api.setGameTags(params.platform, params.id, next);
-      await settingsStore.reload();
-    } catch (err) {
-      console.warn("Nie udało się usunąć tagu:", err);
-    }
-  }
 
   async function run(action: "launch" | "install" | "uninstall") {
     const g = game();
@@ -481,73 +375,9 @@ const GameDetail: Component = () => {
               <span class="badge">{PLATFORM_LABELS[g().platform]}</span>
               <h1 style={{ margin: "10px 0" }}>{g().title}</h1>
 
-              {/* Plakietka ProtonDB — wyłącznie Steam, patrz
-                  `PROTONDB_SUPPORTED_PLATFORMS`/moduł-dokumentacja
-                  `protondb.rs`. `null` może znaczyć zarówno "gra nie ma
-                  jeszcze zgłoszeń w ProtonDB", jak i błąd sieciowy — w obu
-                  przypadkach po prostu nie pokazujemy nic zamiast
-                  zgadywać, który to przypadek. */}
-              <Show when={PROTONDB_SUPPORTED_PLATFORMS.includes(g().platform) && protondb()}>
-                {(rating) => {
-                  const info = () => PROTONDB_TIER_INFO[rating().tier] ?? { label: rating().tier, color: "var(--text-muted)" };
-                  return (
-                    <a
-                      href={`https://www.protondb.com/app/${g().id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{
-                        display: "inline-flex",
-                        "align-items": "center",
-                        gap: "6px",
-                        "font-size": "12px",
-                        padding: "3px 10px",
-                        "border-radius": "999px",
-                        border: `1px solid ${info().color}`,
-                        color: info().color,
-                        "text-decoration": "none",
-                        "margin-bottom": "8px",
-                      }}
-                    >
-                      ProtonDB: {info().label}
-                    </a>
-                  );
-                }}
-              </Show>
-              <Show when={protondbLoading()}>
-                <div style={{ "font-size": "11px", color: "var(--text-muted)", "margin-bottom": "8px" }}>
-                  Sprawdzam ocenę ProtonDB…
-                </div>
-              </Show>
+              <ProtonDbBadge platform={g().platform} id={g().id} />
 
-              {/* Tagi użytkownika — patrz `Settings::game_tags`. Czysto
-                  organizacyjne, filtrowane w `Library.tsx`; Hacker Mode
-                  nigdy nie interpretuje ich treści. */}
-              <div style={{ display: "flex", "flex-wrap": "wrap", gap: "6px", "align-items": "center", "margin-bottom": "12px" }}>
-                <For each={currentTags()}>
-                  {(tag) => (
-                    <span
-                      style={{
-                        display: "inline-flex", "align-items": "center", gap: "4px",
-                        "font-size": "11px", padding: "2px 8px", "border-radius": "999px",
-                        background: "rgba(255,255,255,0.08)", color: "var(--text)",
-                      }}
-                    >
-                      {tag}
-                      <button data-focusable tabIndex={0} onClick={() => removeTag(tag)} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: "0", "font-size": "12px" }}>
-                        ✕
-                      </button>
-                    </span>
-                  )}
-                </For>
-                <input data-focusable tabIndex={0}
-                  type="text"
-                  value={tagInput()}
-                  onInput={(e) => setTagInput(e.currentTarget.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addTag()}
-                  placeholder={t("tag_input_placeholder")}
-                  style={{ width: "80px", "font-size": "11px", padding: "3px 8px", "border-radius": "999px", border: "1px dashed rgba(255,255,255,0.2)", background: "transparent", color: "var(--text)" }}
-                />
-              </div>
+              <GameTags platform={g().platform} id={g().id} />
 
               {/* Opis/zrzuty ekranu: Steam (publiczne Store API), GOG
                   (publiczne `api.gog.com`) i Epic (lokalny cache metadanych
@@ -594,105 +424,11 @@ const GameDetail: Component = () => {
                 </p>
               </Show>
 
-              {/* Wersja Proton (Steam) / Wine (Lutris) — patrz
-                  `COMPAT_TOOL_SUPPORTED_PLATFORMS`/moduł-dokumentacja
-                  `compat_tools.rs`. Dla Steam lista opcji obejmuje
-                  WYŁĄCZNIE narzędzia z `compatibilitytools.d/`
-                  (Proton-GE i podobne) — świadome ograniczenie, patrz ten
-                  sam moduł-dokumentacja po uzasadnienie. */}
-              <Show when={COMPAT_TOOL_SUPPORTED_PLATFORMS.includes(g().platform) && compatOptions()}>
-                {(opts) => (
-                  <div class="settings-panel" style={{ "max-width": "420px", margin: "16px 0" }}>
-                    <h3 style={{ margin: "0 0 8px", "font-size": "13px" }}>
-                      {g().platform === "steam" ? t("compat_tool_panel_title_steam") : t("compat_tool_panel_title_lutris")}
-                    </h3>
-                    <Show
-                      when={opts().options.length > 0}
-                      fallback={
-                        <p style={{ "font-size": "11px", color: "var(--text-muted)", margin: "0" }}>
-                          {g().platform === "steam"
-                            ? t("compat_tool_empty_steam")
-                            : t("compat_tool_empty_lutris")}
-                        </p>
-                      }
-                    >
-                      <select data-focusable tabIndex={0}
-                        value={opts().current ?? ""}
-                        disabled={compatSaving()}
-                        onChange={(e) => saveCompatTool(e.currentTarget.value)}
-                        style={{ width: "100%", padding: "8px", "border-radius": "6px", border: "1px solid rgba(255,255,255,0.1)", background: "var(--bg)", color: "var(--text)" }}
-                      >
-                        <option value="" disabled>
-                          {opts().current ?? "— wybierz —"}
-                        </option>
-                        <For each={opts().options}>
-                          {(o) => <option value={o.value}>{o.label}</option>}
-                        </For>
-                      </select>
-                    </Show>
-                    <Show when={compatMessage()}>
-                      <p style={{ color: "var(--danger)", "font-size": "11px", margin: "8px 0 0" }}>{compatMessage()}</p>
-                    </Show>
-                  </div>
-                )}
-              </Show>
+              <CompatToolPanel platform={g().platform} id={g().id} />
 
-              {/* Osiągnięcia Steam — patrz `PROTONDB_SUPPORTED_PLATFORMS`
-                  (te same warunki dotyczą Steam Web API) i
-                  `steam::fetch_achievements`. Pokazuje się tylko, gdy
-                  faktycznie coś dostaliśmy — brak klucza API, prywatny
-                  profil i gra bez osiągnięć wszystkie kończą się tym
-                  samym: `achievements()` zostaje `null`. */}
-              <Show when={achievementsLoading()}>
-                <div style={{ "font-size": "11px", color: "var(--text-muted)", margin: "8px 0" }}>
-                  {t("achievements_loading")}
-                </div>
-              </Show>
-              <Show when={achievements()}>
-                {(list) => {
-                  const unlocked = () => list().filter((a) => a.achieved).length;
-                  return (
-                    <div class="settings-panel" style={{ "max-width": "600px", margin: "16px 0" }}>
-                      <h3 style={{ margin: "0 0 10px", "font-size": "13px" }}>
-                        {t("achievements_title")} ({unlocked()}/{list().length})
-                      </h3>
-                      <div style={{ display: "grid", "grid-template-columns": "repeat(auto-fill, minmax(48px, 1fr))", gap: "8px" }}>
-                        <For each={list()}>
-                          {(a) => (
-                            <img
-                              src={a.icon_url}
-                              alt={a.display_name}
-                              title={`${a.display_name}${a.description ? " — " + a.description : ""}`}
-                              style={{ width: "48px", height: "48px", "border-radius": "6px", opacity: a.achieved ? "1" : "0.35" }}
-                            />
-                          )}
-                        </For>
-                      </div>
-                    </div>
-                  );
-                }}
-              </Show>
+              <AchievementsPanel platform={g().platform} id={g().id} />
 
-              {/* Historia sesji — patrz `playtime::get_session_history`.
-                  Dostępna dla wszystkich platform (to lokalny licznik
-                  Hacker Mode, niezależny od sklepu) — patrz
-                  moduł-dokumentacja `playtime.rs` po zastrzeżenie, że
-                  obejmuje TYLKO sesje uruchomione przez Hacker Mode. */}
-              <Show when={sessionHistory().length > 0}>
-                <div class="settings-panel" style={{ "max-width": "420px", margin: "16px 0" }}>
-                  <h3 style={{ margin: "0 0 8px", "font-size": "13px" }}>Historia sesji</h3>
-                  <div style={{ display: "flex", "flex-direction": "column", gap: "4px", "max-height": "140px", "overflow-y": "auto" }}>
-                    <For each={sessionHistory()}>
-                      {(s) => (
-                        <div style={{ display: "flex", "justify-content": "space-between", "font-size": "11px", color: "var(--text-muted)" }}>
-                          <span>{new Date(s.at * 1000).toLocaleString()}</span>
-                          <span>{s.minutes} min</span>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </div>
-              </Show>
+              <SessionHistoryPanel platform={g().platform} id={g().id} />
 
               {/* Kopie zapasowe zapisu — patrz moduł-dokumentacja
                   `cloud_saves.rs`. Dostępne dla WSZYSTKICH platform (w
