@@ -3,6 +3,7 @@ import { api, type Settings } from "@/lib/tauri";
 import { detectLang, type Lang } from "@/i18n";
 
 const defaultSettings: Settings = {
+  compositor: "labwc",
   language: detectLang(),
   theme: "dark",
   wrapper_mode_enabled: true,
@@ -21,6 +22,8 @@ const defaultSettings: Settings = {
   ea_wine_prefix: null,
   battlenet_wine_prefix: null,
   crash_detection_threshold_seconds: 8,
+  allow_config_write_while_running: false,
+  lutris_delete_files_on_uninstall: false,
 };
 
 const [settings, setSettings] = createSignal<Settings>(defaultSettings);
