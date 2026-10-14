@@ -86,6 +86,14 @@ jobs:
       # `tsc --noEmit`, bez emitowania plików, tylko sprawdzenie typów.
       # Uruchamiane PRZED `npm run build`, żeby błąd typów przerwał
       # workflow zanim zdąży zmarnować czas na sam build.
+      - name: Parytet tłumaczeń (klucze i placeholdery we wszystkich językach)
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm run check:i18n
+
+      - name: Testy frontendu (vitest)
+        working-directory: ${{ env.FRONTEND_DIR }}
+        run: npm test
+
       - name: Sprawdzenie typów (tsc --noEmit)
         working-directory: ${{ env.FRONTEND_DIR }}
         run: npm run check
@@ -167,14 +175,14 @@ jobs:
       # `cargo` (który i tak sobie z tym radzi, po prostu aktualizując
       # lock w locie, dokładnie tak jak poniższe `cargo test`/`cargo
       # build` już robią bez `--locked`).
-      - name: cargo check --workspace
-        run: cargo check --workspace
+      - name: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets
 
       # Odpowiednik `make test`. Dwa osobne wywołania (nie jedno
       # `cargo test --workspace`) — tak samo jak `Makefile`, żeby log
       # błędu jednoznacznie wskazywał, w którym pakiecie testy nie
       # przeszły, zamiast przemieszanego wyjścia obu naraz.
-      - name: cargo test -p hacker-mode-ipc
+      - name: cargo test -p hacker-mode-ipc (w tym mock serwera comphwde)
         run: cargo test -p hacker-mode-ipc
 
       - name: cargo test -p hacker-mode
@@ -196,3 +204,29 @@ jobs:
             target/release/hacker-mode
             target/release/hacker-mode-ipcctl
           retention-days: 14
+
+  # Prawdziwy cykl życia sesji z prawdziwym labwc w trybie headless
+  # (WLR_BACKENDS=headless - bez GPU i monitora): wybór kompozytora z
+  # config.json, kopiowanie rc.xml, start klienta z WAYLAND_DISPLAY i
+  # zakończenie labwc po wyjściu powłoki. NIE zastępuje testu na prawdziwym
+  # menedżerze logowania (SDDM/GDM) - patrz docs/TESTING_SESSION.md.
+  session:
+    name: Sesja (labwc headless)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: labwc + shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y labwc shellcheck
+
+      - name: shellcheck skryptów
+        run: shellcheck -S warning scripts/hacker-mode-session scripts/test-session-headless.sh scripts/validate-desktop-entry.sh
+
+      - name: Walidacja pliku .desktop
+        run: scripts/validate-desktop-entry.sh
+
+      - name: Test cyklu życia sesji
+        run: scripts/test-session-headless.sh
