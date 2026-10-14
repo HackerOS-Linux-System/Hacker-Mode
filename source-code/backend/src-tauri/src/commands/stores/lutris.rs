@@ -1,7 +1,9 @@
 use super::{tool_available, Game, Platform, StoreError, StoreProvider};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Default)]
 pub struct LutrisProvider;
@@ -136,6 +138,15 @@ impl StoreProvider for LutrisProvider {
                 db_path.display()
             )));
         }
+        // Opcjonalne kasowanie plików (Ustawienia → `lutris_delete_files_on_uninstall`,
+        // domyślnie WYŁĄCZONE). Katalog gry musimy odczytać TERAZ, bo poniższe
+        // UPDATE czyści kolumnę `directory`; faktyczne kasowanie następuje
+        // dopiero po potwierdzonym sukcesie UPDATE-a (`on_uninstall_finished`).
+        if crate::settings::Settings::load_or_default().lutris_delete_files_on_uninstall {
+            if let Some(dir) = directory_for_slug(game_id) {
+                pending_deletions().lock().unwrap_or_else(|e| e.into_inner()).insert(game_id.to_string(), dir);
+            }
+        }
         let sql = format!(
             "UPDATE games SET installed = 0, directory = NULL WHERE slug = '{}';",
             sql_escape(game_id)
@@ -231,4 +242,112 @@ fn find_local_cover_art(slug: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------
+// Opcjonalne kasowanie plików gry po odinstalowaniu
+// ---------------------------------------------------------------------
+
+fn pending_deletions() -> &'static Mutex<HashMap<String, PathBuf>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Katalog instalacji gry zapisany w `pga.db` (kolumna `directory`).
+fn directory_for_slug(slug: &str) -> Option<PathBuf> {
+    if !tool_available("sqlite3") {
+        return None;
+    }
+    let db = pga_db_path();
+    if !db.is_file() {
+        return None;
+    }
+    let sql = format!("SELECT directory FROM games WHERE slug = '{}' LIMIT 1;", sql_escape(slug));
+    let out = Command::new("sqlite3").arg("-noheader").arg(&db).arg(sql).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if value.is_empty() || value == "NULL" {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+/// Katalogi, z których wolno kasować pliki gier Lutrisa. Świadomie wąska
+/// lista: domyślny `~/Games`, dane Lutrisa i wersja Flatpak. Gra zainstalowana
+/// gdzie indziej zostanie tylko usunięta z biblioteki (pliki zostają).
+fn allowed_delete_roots() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    vec![
+        home.join("Games"),
+        dirs::data_dir().unwrap_or_default().join("lutris"),
+        home.join(".var/app/net.lutris.Lutris/data/lutris"),
+    ]
+}
+
+/// Czy `dir` można bezpiecznie skasować: musi istnieć, nie być dowiązaniem
+/// symbolicznym i leżeć STRICTE POD jednym z `roots` (nigdy sam root -
+/// `~/Games` jako całość nie zostanie skasowany). Porównanie po
+/// `canonicalize`, więc `..` i symlinki pośrednie nie pomogą.
+pub(crate) fn is_safe_to_delete(dir: &Path, roots: &[PathBuf]) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(dir) else { return false };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return false;
+    }
+    let Ok(canonical) = dir.canonicalize() else { return false };
+    roots.iter().filter_map(|r| r.canonicalize().ok()).any(|root| canonical != root && canonical.starts_with(&root))
+}
+
+/// Wywoływane po potwierdzonym sukcesie odinstalowania (patrz
+/// `stores::on_uninstall_finished`).
+pub(crate) fn finish_uninstall(slug: &str) {
+    let Some(dir) = pending_deletions().lock().unwrap_or_else(|e| e.into_inner()).remove(slug) else {
+        return;
+    };
+    if !is_safe_to_delete(&dir, &allowed_delete_roots()) {
+        tracing::warn!(dir = %dir.display(), "Pomijam kasowanie plików gry Lutrisa - katalog poza dozwolonymi lokalizacjami (gra tylko usunięta z biblioteki)");
+        return;
+    }
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => tracing::info!(dir = %dir.display(), "Skasowano pliki gry Lutrisa"),
+        Err(e) => tracing::warn!(dir = %dir.display(), error = %e, "Nie udało się skasować plików gry Lutrisa"),
+    }
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    #[test]
+    fn only_strictly_inside_allowed_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Games");
+        let game = root.join("witcher3");
+        let outside = tmp.path().join("Documents");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let roots = vec![root.clone()];
+
+        assert!(is_safe_to_delete(&game, &roots));
+        assert!(!is_safe_to_delete(&root, &roots), "sam root nigdy");
+        assert!(!is_safe_to_delete(&outside, &roots));
+        assert!(!is_safe_to_delete(&root.join("nie-istnieje"), &roots));
+    }
+
+    #[test]
+    fn symlinks_and_dotdot_escapes_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Games");
+        let outside = tmp.path().join("Documents");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let roots = vec![root.clone()];
+
+        assert!(!is_safe_to_delete(&link, &roots), "symlink");
+        assert!(!is_safe_to_delete(&root.join("..").join("Documents"), &roots), "ucieczka przez ..");
+    }
 }
