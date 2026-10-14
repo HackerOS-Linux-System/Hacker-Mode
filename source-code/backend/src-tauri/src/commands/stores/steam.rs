@@ -129,6 +129,65 @@ fn find_cover_art(root: &Path, appid: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Kandydaci na `registry.vdf` Steama - lokalny plik, w którym działający
+/// klient zapisuje m.in. `RunningAppID` (identyfikator AKTUALNIE
+/// uruchomionej gry, `0` gdy żadnej).
+fn registry_vdf_candidates() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    vec![
+        home.join(".steam/registry.vdf"),
+        home.join(".steam/steam/registry.vdf"),
+        home.join(".var/app/com.valvesoftware.Steam/.steam/registry.vdf"),
+        home.join(".var/app/com.valvesoftware.Steam/.steam/steam/registry.vdf"),
+    ]
+}
+
+/// Szuka (rekurencyjnie, bez rozróżniania wielkości liter) klucza
+/// `RunningAppID` w sparsowanym VDF. Zwraca `Some(appid)` tylko dla wartości
+/// niezerowej.
+fn find_running_appid(value: &VdfValue) -> Option<String> {
+    let VdfValue::Map(map) = value else { return None };
+    for (key, child) in map {
+        if key.eq_ignore_ascii_case("RunningAppID") {
+            if let Some(v) = child.as_str() {
+                let v = v.trim();
+                if !v.is_empty() && v != "0" && v.chars().all(|c| c.is_ascii_digit()) {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    map.values().find_map(find_running_appid)
+}
+
+/// Parsuje zawartość `registry.vdf`; `None` = żadna gra nie jest uruchomiona
+/// (albo plik nie ma tego klucza).
+pub(crate) fn parse_running_appid(content: &str) -> Option<String> {
+    find_running_appid(&VdfValue::parse(content))
+}
+
+/// Lokalne (bez klucza Web API i bez sieci) sprawdzenie, jaka gra Steam jest
+/// aktualnie uruchomiona.
+///
+/// * `None` - nie znaleziono żadnego odczytywalnego `registry.vdf`
+///   (np. Steam jeszcze nigdy nie był uruchomiony) - wywołujący powinien
+///   uznać, że ta metoda jest niedostępna;
+/// * `Some(None)` - plik jest, ale żadna gra nie działa;
+/// * `Some(Some(appid))` - działa gra o tym AppID.
+///
+/// Uwaga: wartość odzwierciedla stan zapisany przez Steam, który może
+/// wyprzedzać/opóźniać się o ułamki sekund względem faktycznego startu
+/// gry - dlatego `launcher.rs` używa jej z oknem oczekiwania na start,
+/// tak samo jak ścieżki opartej o Web API.
+pub fn local_running_appid() -> Option<Option<String>> {
+    for path in registry_vdf_candidates() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return Some(parse_running_appid(&content));
+        }
+    }
+    None
+}
+
 /// BUGFIX: `appmanifest_*.acf` (skanowane w `list_games`) opisuje KAŻDĄ
 /// zainstalowaną "aplikację" Steam tym samym formatem — łącznie z własnymi
 /// narzędziami kompatybilności Valve (Proton, Steam Linux Runtime), które
@@ -401,6 +460,33 @@ pub struct StoreSearchResult {
 }
 
 /// Przeszukuje katalog Steam przez publiczne, nieuwierzytelnione API
+/// Normalizacja tytułu do porównań: małe litery, tylko znaki alfanumeryczne
+/// (znaki ™ ® : - ' i spacje nie mają znaczenia).
+pub(crate) fn normalize_title(title: &str) -> String {
+    title.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Wybiera z wyników wyszukiwania TYLKO wpis o tytule identycznym (po
+/// normalizacji) z szukanym. Celowo bez dopasowań „podobnych": dla gier z
+/// innych sklepów (Amazon/EA/Battle.net) lepiej nie pokazać opisu wcale
+/// niż opis innej gry (np. sequela).
+pub(crate) fn best_title_match(title: &str, results: &[StoreSearchResult]) -> Option<u64> {
+    let wanted = normalize_title(title);
+    if wanted.is_empty() {
+        return None;
+    }
+    results.iter().find(|r| normalize_title(&r.name) == wanted).map(|r| r.appid)
+}
+
+/// Zapasowe źródło opisu i zrzutów ekranu dla platform bez własnego
+/// publicznego API (Amazon Games, EA app, Battle.net): jeśli ta sama gra
+/// jest w Steamie (dokładny tytuł), bierzemy dane z publicznego Store API.
+/// `None`, gdy gry nie ma w Steamie (np. tytuły Blizzarda) albo brak sieci.
+pub fn fetch_store_details_by_title(title: &str) -> Option<super::GameDetails> {
+    let appid = best_title_match(title, &search_store(title))?;
+    fetch_store_details(&appid.to_string())
+}
+
 /// `store.steampowered.com/api/storesearch` — to jest realne "natywne"
 /// przeglądanie sklepu (dane, nie strona WWW w webview), używane w
 /// `Store.tsx`. Wyniki prowadzą do `steam://store/<appid>`, które otwiera
@@ -1164,5 +1250,64 @@ mod tests {
         let map = parsed.as_map().unwrap();
         let entry0 = map.get("0").unwrap().as_map().unwrap();
         assert_eq!(entry0.get("path").unwrap().as_str().unwrap(), "/mnt/games");
+    }
+}
+
+
+#[cfg(test)]
+mod running_appid_tests {
+    use super::*;
+
+    const REGISTRY_RUNNING: &str = "\"Registry\"\n{\n\t\"HKCU\"\n\t{\n\t\t\"Software\"\n\t\t{\n\t\t\t\"Valve\"\n\t\t\t{\n\t\t\t\t\"Steam\"\n\t\t\t\t{\n\t\t\t\t\t\"language\"\t\t\"english\"\n\t\t\t\t\t\"RunningAppID\"\t\t\"1245620\"\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n";
+
+    #[test]
+    fn detects_running_app_from_registry_vdf() {
+        assert_eq!(parse_running_appid(REGISTRY_RUNNING).as_deref(), Some("1245620"));
+    }
+
+    #[test]
+    fn zero_means_no_game_running() {
+        let content = REGISTRY_RUNNING.replace("1245620", "0");
+        assert_eq!(parse_running_appid(&content), None);
+    }
+
+    #[test]
+    fn missing_key_or_garbage_means_none() {
+        assert_eq!(parse_running_appid("\"Registry\"\n{\n}\n"), None);
+        assert_eq!(parse_running_appid("to nie jest vdf"), None);
+        assert_eq!(parse_running_appid(""), None);
+    }
+
+    #[test]
+    fn key_match_is_case_insensitive_and_digits_only() {
+        let content = REGISTRY_RUNNING.replace("RunningAppID", "runningappid");
+        assert_eq!(parse_running_appid(&content).as_deref(), Some("1245620"));
+        let bad = REGISTRY_RUNNING.replace("1245620", "12abc");
+        assert_eq!(parse_running_appid(&bad), None);
+    }
+}
+
+
+#[cfg(test)]
+mod title_match_tests {
+    use super::*;
+
+    fn r(appid: u64, name: &str) -> StoreSearchResult {
+        StoreSearchResult { appid, name: name.to_string(), cover_url: None, price: None }
+    }
+
+    #[test]
+    fn normalizes_punctuation_and_case() {
+        assert_eq!(normalize_title("The Witcher® 3: Wild Hunt"), normalize_title("the witcher 3 wild hunt"));
+        assert_eq!(normalize_title("   "), "");
+    }
+
+    #[test]
+    fn matches_only_identical_titles() {
+        let results = [r(1, "Apex Legends: Season Pass"), r(1172470, "Apex Legends™"), r(3, "Apex Legends 2")];
+        assert_eq!(best_title_match("Apex Legends", &results), Some(1172470));
+        assert_eq!(best_title_match("Apex", &results), None, "częściowy tytuł nie może pasować");
+        assert_eq!(best_title_match("", &results), None);
+        assert_eq!(best_title_match("Diablo IV", &results), None);
     }
 }
