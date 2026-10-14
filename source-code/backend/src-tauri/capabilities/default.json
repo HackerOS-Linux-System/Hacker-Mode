@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Domyślne uprawnienia dla powłoki Hacker Mode",
-  "windows": ["shell", "storefront-*", "login-*"],
+  "description": "Uprawnienia powłoki Hacker Mode (tylko okno lokalne `shell`). Okna sklepów/logowania ładują ZEWNĘTRZNE strony i celowo nie mają żadnych uprawnień IPC.",
+  "windows": [
+    "shell"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-set-fullscreen",
@@ -11,9 +13,35 @@
     "core:window:allow-set-focus",
     "core:webview:allow-create-webview-window",
     "core:event:default",
-    "shell:allow-open",
-    "dialog:default",
-    "fs:default",
-    "os:default"
+    "dialog:allow-open",
+    "dialog:allow-save",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [
+        {
+          "path": "$DOWNLOAD/**"
+        },
+        {
+          "path": "$DOCUMENT/**"
+        },
+        {
+          "path": "$DESKTOP/**"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        {
+          "path": "$DOWNLOAD/**"
+        },
+        {
+          "path": "$DOCUMENT/**"
+        },
+        {
+          "path": "$DESKTOP/**"
+        }
+      ]
+    }
   ]
 }
