@@ -1,0 +1,266 @@
+pub fn sq(s: string) -> string is
+    return "'" + string_replace(s, "'", "'\\''") + "'"
+end
+
+;; stdout polecenia, bez białych znaków na brzegach.
+pub fn sh(cmd: string) -> string is
+    return string_trim(shell(cmd))
+end
+
+;; kod wyjścia polecenia (stdout/stderr odrzucone).
+pub fn rc(cmd: string) -> int is
+    let out: string = string_trim(shell("( " + cmd + " ) >/dev/null 2>&1; echo $?"))
+    return str_to_int(out)
+end
+
+;; czy polecenie jest w PATH.
+pub fn have(name: string) -> bool is
+    return rc("command -v " + sq(name)) == 0
+end
+
+;; pierwsze znalezione polecenie z listy lub "".
+pub fn first_tool(names: [string]) -> string is
+    let mut i: int = 0
+    while i < array_len(names) is
+        if have(names[i]) is return names[i] end
+        i += 1
+    end
+    return ""
+end
+
+;; ── Napisy ───────────────────────────────────────────────────────────────────
+
+pub fn or_default(v: string, fallback: string) -> string is
+    if v != "" is return v end
+    return fallback
+end
+
+pub fn join(items: [string], sep: string) -> string is
+    let mut out: string = ""
+    let mut i: int = 0
+    while i < array_len(items) is
+        if i > 0 is out = out + sep end
+        out = out + items[i]
+        i += 1
+    end
+    return out
+end
+
+pub fn has(items: [string], needle: string) -> bool is
+    let mut i: int = 0
+    while i < array_len(items) is
+        if items[i] == needle is return true end
+        i += 1
+    end
+    return false
+end
+
+pub fn without(items: [string], needle: string) -> [string] is
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(items) is
+        if items[i] != needle is out = array_push(out, items[i]) end
+        i += 1
+    end
+    return out
+end
+
+;; niepuste linie
+pub fn lines(s: string) -> [string] is
+    let parts: [string] = string_split(s, "\n")
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(parts) is
+        let t: string = string_trim(parts[i])
+        if t != "" is out = array_push(out, t) end
+        i += 1
+    end
+    return out
+end
+
+pub fn after(s: string, marker: string) -> string is
+    let i: int = string_find(s, marker)
+    if i < 0 is return "" end
+    return string_slice(s, i + string_len(marker), string_len(s))
+end
+
+pub fn before(s: string, marker: string) -> string is
+    let i: int = string_find(s, marker)
+    if i < 0 is return s end
+    return string_slice(s, 0, i)
+end
+
+;; do ostatniego `sep`
+pub fn rafter(s: string, sep: string) -> string is
+    let parts: [string] = string_split(s, sep)
+    if array_len(parts) == 0 is return s end
+    return parts[array_len(parts) - 1]
+end
+
+pub fn basename(p: string) -> string is
+    let mut q: string = p
+    while string_len(q) > 1 && string_ends_with(q, "/") is q = string_slice(q, 0, string_len(q) - 1) end
+    return rafter(q, "/")
+end
+
+pub fn fmt_date(ts: int) -> string is
+    return sh("date -d @" + to_string(ts) + " '+%Y-%m-%d %H:%M' 2>/dev/null")
+end
+
+pub fn dirname(p: string) -> string is
+    if !string_contains(p, "/") is return "" end
+    let tail: int = string_len(rafter(p, "/"))
+    let cut: int = string_len(p) - tail - 1
+    if cut <= 0 is return "/" end
+    return string_slice(p, 0, cut)
+end
+
+pub fn pad_right_str(s: string, w: int) -> string is
+    let mut o: string = s
+    while string_len(o) < w is o = o + " " end
+    return o
+end
+
+pub fn clip(s: string, n: int) -> string is
+    if string_len(s) <= n is return s end
+    if n < 2 is return string_slice(s, 0, n) end
+    return string_slice(s, 0, n - 1) + "…"
+end
+
+pub fn pad_left(s: string, w: int, ch: string) -> string is
+    let mut o: string = s
+    while string_len(o) < w is o = ch + o end
+    return o
+end
+
+pub fn digits_only(s: string) -> string is
+    let mut out: string = ""
+    let mut i: int = 0
+    while i < string_len(s) is
+        let c: string = string_at(s, i)
+        if string_contains("0123456789", c) is out = out + c end
+        i += 1
+    end
+    return out
+end
+
+pub fn is_digits(s: string) -> bool is
+    return s != "" && digits_only(s) == s
+end
+
+;; minuty -> "3 h 20 min"
+pub fn fmt_minutes(m: int) -> string is
+    if m <= 0 is return "0 min" end
+    if m < 60 is return to_string(m) + " min" end
+    let h: int = m / 60
+    let r: int = m - h * 60
+    if r == 0 is return to_string(h) + " h" end
+    return to_string(h) + " h " + to_string(r) + " min"
+end
+
+;; Kodowanie pól do formatu TSV (plik tekstowy, jeden rekord = jedna linia).
+pub fn tsv_esc(s: string) -> string is
+    let a: string = string_replace(s, "\\", "\\\\")
+    let b: string = string_replace(a, "\t", "\\t")
+    return string_replace(b, "\n", "\\n")
+end
+
+pub fn tsv_unesc(s: string) -> string is
+    let a: string = string_replace(s, "\\n", "\n")
+    let b: string = string_replace(a, "\\t", "\t")
+    return string_replace(b, "\\\\", "\\")
+end
+
+;; ── Ścieżki i pliki ──────────────────────────────────────────────────────────
+
+pub fn home() -> string is
+    return or_default(env_get("HOME"), "/root")
+end
+
+pub fn config_dir() -> string is
+    return or_default(env_get("XDG_CONFIG_HOME"), home() + "/.config")
+end
+
+pub fn data_dir() -> string is
+    return or_default(env_get("XDG_DATA_HOME"), home() + "/.local/share")
+end
+
+pub fn cache_dir() -> string is
+    return or_default(env_get("XDG_CACHE_HOME"), home() + "/.cache")
+end
+
+pub fn mkdirp(path: string) is
+    fs_mkdir_all(path)
+end
+
+pub fn exists(path: string) -> bool is
+    return fs_exists(path)
+end
+
+pub fn read(path: string) -> string is
+    if !fs_exists(path) is return "" end
+    return fs_read(path)
+end
+
+;; zapis atomowy: plik tymczasowy w tym samym katalogu + rename; `mode` np. "600".
+pub fn write_atomic(path: string, data: string, mode: string) is
+    let dir: string = dirname(path)
+    if dir != "" is mkdirp(dir) end
+    let tmp: string = path + ".tmp-" + to_string(now_ms())
+    fs_write(tmp, data)
+    if mode != "" is rc("chmod " + mode + " " + sq(tmp)) end
+    fs_rename(tmp, path)
+end
+
+pub fn append_line(path: string, line: string) is
+    let dir: string = dirname(path)
+    if dir != "" is mkdirp(dir) end
+    fs_append(path, line + "\n")
+end
+
+;; pliki w katalogu (same nazwy); [] gdy katalogu nie ma
+pub fn ls(dir: string) -> [string] is
+    if !fs_is_dir(dir) is return [] end
+    let out: string = shell("ls -1A " + sq(dir) + " 2>/dev/null")
+    return lines(out)
+end
+
+;; Rozwija `~` na początku ścieżki.
+pub fn expand(p: string) -> string is
+    if p == "~" is return home() end
+    if string_starts_with(p, "~/") is return home() + string_slice(p, 1, string_len(p)) end
+    return p
+end
+
+;; ── Sieć (curl) ──────────────────────────────────────────────────────────────
+
+;; GET przez curl z limitem czasu; "" przy błędzie.
+pub fn http_get(url: string, timeout_s: int) -> string is
+    return shell("curl -fsSL --max-time " + to_string(timeout_s) + " -A 'Hacker-Mode' " + sq(url) + " 2>/dev/null")
+end
+
+pub fn http_post_json(url: string, body: string, timeout_s: int) -> string is
+    return shell("curl -fsSL --max-time " + to_string(timeout_s) + " -A 'Hacker-Mode' -H 'Content-Type: application/json' -d " + sq(body) + " " + sq(url) + " 2>/dev/null")
+end
+
+;; pobiera plik; true gdy się udało
+pub fn download(url: string, dest: string, timeout_s: int) -> bool is
+    let dir: string = dirname(dest)
+    if dir != "" is mkdirp(dir) end
+    let tmp: string = dest + ".part"
+    let ok: int = rc("curl -fsSL --max-time " + to_string(timeout_s) + " -A 'Hacker-Mode' -o " + sq(tmp) + " " + sq(url))
+    if ok != 0 is
+        rc("rm -f " + sq(tmp))
+        return false
+    end
+    fs_rename(tmp, dest)
+    return true
+end
+
+;; ── Logowanie ────────────────────────────────────────────────────────────────
+
+pub fn log(msg: string) is
+    let line: string = to_string(now_unix()) + " " + msg
+    append_line(cache_dir() + "/hacker-mode/hacker-mode.log", line)
+    if env_get("HACKER_MODE_VERBOSE") != "" is println(line) end
+end
