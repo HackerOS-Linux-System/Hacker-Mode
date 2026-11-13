@@ -1,0 +1,379 @@
+pub fn skip_ws(s: string, i: int) -> int is
+    let n: int = string_len(s)
+    let mut k: int = i
+    while k < n is
+        let c: string = string_at(s, k)
+        if c == " " || c == "\n" || c == "\t" || c == "\r" is
+            k += 1
+        else is
+            return k
+        end
+    end
+    return k
+end
+
+;; `i` wskazuje otwierający cudzysłów; zwraca indeks ZA zamykającym
+pub fn str_end(s: string, i: int) -> int is
+    let n: int = string_len(s)
+    let mut k: int = i + 1
+    while k < n is
+        let c: string = string_at(s, k)
+        if c == "\\" is
+            k += 2
+        elsif c == "\"" is
+            return k + 1
+        else is
+            k += 1
+        end
+    end
+    return n
+end
+
+;; indeks za wartością zaczynającą się w `i0`
+pub fn value_end(s: string, i0: int) -> int is
+    let n: int = string_len(s)
+    let i: int = skip_ws(s, i0)
+    if i >= n is return n end
+    let c: string = string_at(s, i)
+    if c == "\"" is return str_end(s, i) end
+    if c == "{" || c == "[" is
+        let mut depth: int = 0
+        let mut k: int = i
+        while k < n is
+            let d: string = string_at(s, k)
+            if d == "\"" is
+                k = str_end(s, k)
+            else is
+                if d == "{" || d == "[" is depth += 1 end
+                if d == "}" || d == "]" is
+                    depth -= 1
+                    if depth == 0 is return k + 1 end
+                end
+                k += 1
+            end
+        end
+        return n
+    end
+    let mut k2: int = i
+    while k2 < n is
+        let d2: string = string_at(s, k2)
+        if d2 == "," || d2 == "}" || d2 == "]" || d2 == " " || d2 == "\n" || d2 == "\r" || d2 == "\t" is return k2 end
+        k2 += 1
+    end
+    return n
+end
+
+fn hexval(c: string) -> int is
+    let d: string = "0123456789abcdef"
+    let i: int = string_find(d, string_lower(c))
+    return i
+end
+
+fn hex4(s: string, i: int) -> int is
+    let mut v: int = 0
+    let mut k: int = 0
+    while k < 4 is
+        let h: int = hexval(string_at(s, i + k))
+        if h < 0 is return -1 end
+        v = v * 16 + h
+        k += 1
+    end
+    return v
+end
+
+;; `"tekst"` (z cudzysłowami) -> tekst; wartość bez cudzysłowów zwracana bez zmian
+pub fn unq(raw: string) -> string is
+    let t: string = string_trim(raw)
+    let n: int = string_len(t)
+    if n < 2 || string_at(t, 0) != "\"" is return t end
+    if !string_contains(t, "\\") is return string_slice(t, 1, n - 1) end
+    let mut out: string = ""
+    let mut i: int = 1
+    while i < n - 1 is
+        let c: string = string_at(t, i)
+        if c != "\\" is
+            out = out + c
+            i += 1
+        else is
+            let e: string = string_at(t, i + 1)
+            if e == "n" is
+                out = out + "\n"
+                i += 2
+            elsif e == "t" is
+                out = out + "\t"
+                i += 2
+            elsif e == "r" is
+                i += 2
+            elsif e == "b" || e == "f" is
+                i += 2
+            elsif e == "u" is
+                let mut cp: int = hex4(t, i + 2)
+                i += 6
+                if cp >= 55296 && cp <= 56319 && i + 5 < n && string_at(t, i) == "\\" && string_at(t, i + 1) == "u" is
+                    let lo: int = hex4(t, i + 2)
+                    if lo >= 56320 && lo <= 57343 is
+                        cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                        i += 6
+                    end
+                end
+                if cp > 0 is out = out + char_code_to_str(cp) end
+            else is
+                out = out + e
+                i += 2
+            end
+        end
+    end
+    return out
+end
+
+;; Cytuje tekst do literału JSON.
+pub fn quote(s: string) -> string is
+    let a: string = string_replace(s, "\\", "\\\\")
+    let b: string = string_replace(a, "\"", "\\\"")
+    let c: string = string_replace(b, "\n", "\\n")
+    let d: string = string_replace(c, "\r", "\\r")
+    let e: string = string_replace(d, "\t", "\\t")
+    return "\"" + e + "\""
+end
+
+;; wartość klucza obiektu (surowa) lub ""
+pub fn get(obj: string, key: string) -> string is
+    let n: int = string_len(obj)
+    let mut i: int = skip_ws(obj, 0)
+    if i >= n || string_at(obj, i) != "{" is return "" end
+    i += 1
+    while i < n is
+        i = skip_ws(obj, i)
+        if i >= n is return "" end
+        let c: string = string_at(obj, i)
+        if c == "}" is return "" end
+        if c == "," is
+            i += 1
+            continue
+        end
+        if c != "\"" is return "" end
+        let ke: int = str_end(obj, i)
+        let k: string = unq(string_slice(obj, i, ke))
+        i = skip_ws(obj, ke)
+        if i < n && string_at(obj, i) == ":" is i += 1 end
+        i = skip_ws(obj, i)
+        let ve: int = value_end(obj, i)
+        if k == key is return string_slice(obj, i, ve) end
+        i = ve
+    end
+    return ""
+end
+
+;; elementy tablicy (surowe)
+pub fn items(arr: string) -> [string] is
+    let n: int = string_len(arr)
+    let mut out: [string] = []
+    let mut i: int = skip_ws(arr, 0)
+    if i >= n || string_at(arr, i) != "[" is return out end
+    i += 1
+    while i < n is
+        i = skip_ws(arr, i)
+        if i >= n is return out end
+        let c: string = string_at(arr, i)
+        if c == "]" is return out end
+        if c == "," is
+            i += 1
+            continue
+        end
+        let ve: int = value_end(arr, i)
+        out = array_push(out, string_slice(arr, i, ve))
+        i = ve
+    end
+    return out
+end
+
+;; klucze obiektu
+pub fn keys(obj: string) -> [string] is
+    let n: int = string_len(obj)
+    let mut out: [string] = []
+    let mut i: int = skip_ws(obj, 0)
+    if i >= n || string_at(obj, i) != "{" is return out end
+    i += 1
+    while i < n is
+        i = skip_ws(obj, i)
+        if i >= n is return out end
+        let c: string = string_at(obj, i)
+        if c == "}" is return out end
+        if c == "," is
+            i += 1
+            continue
+        end
+        if c != "\"" is return out end
+        let ke: int = str_end(obj, i)
+        out = array_push(out, unq(string_slice(obj, i, ke)))
+        i = skip_ws(obj, ke)
+        if i < n && string_at(obj, i) == ":" is i += 1 end
+        i = value_end(obj, skip_ws(obj, i))
+    end
+    return out
+end
+
+;; ścieżka `a.b.0.c` (liczba = indeks tablicy) -> wartość surowa
+pub fn path(doc: string, p: string) -> string is
+    let segs: [string] = string_split(p, ".")
+    let mut cur: string = doc
+    let mut i: int = 0
+    while i < array_len(segs) is
+        let seg: string = segs[i]
+        let t: string = string_trim(cur)
+        if t == "" is return "" end
+        if string_at(t, 0) == "[" is
+            let its: [string] = items(t)
+            let idx: int = str_to_int(seg)
+            if idx < 0 || idx >= array_len(its) is return "" end
+            cur = its[idx]
+        else is
+            cur = get(t, seg)
+        end
+        i += 1
+    end
+    return cur
+end
+
+pub fn gstr(obj: string, key: string) -> string is
+    return unq(get(obj, key))
+end
+
+pub fn pstr(doc: string, p: string) -> string is
+    return unq(path(doc, p))
+end
+
+pub fn to_int(raw: string) -> int is
+    let t: string = unq(raw)
+    let dot: int = string_find(t, ".")
+    if dot >= 0 is return str_to_int(string_slice(t, 0, dot)) end
+    return str_to_int(t)
+end
+
+pub fn to_bool(raw: string) -> bool is
+    let t: string = string_trim(raw)
+    return t == "true" || t == "1"
+end
+
+pub fn gint(obj: string, key: string) -> int is
+    return to_int(get(obj, key))
+end
+
+pub fn gbool(obj: string, key: string) -> bool is
+    return to_bool(get(obj, key))
+end
+
+;; Ustawia klucz obiektu na wartość SUROWĄ (dodaje lub podmienia, zachowuje pozostałe klucze).
+pub fn set(obj: string, key: string, raw: string) -> string is
+    let t: string = string_trim(obj)
+    let ks: [string] = keys(t)
+    let mut out: string = "{"
+    let mut first: bool = true
+    let mut found: bool = false
+    let mut i: int = 0
+    while i < array_len(ks) is
+        if !first is out = out + "," end
+        first = false
+        out = out + quote(ks[i]) + ":"
+        if ks[i] == key is
+            out = out + raw
+            found = true
+        else is
+            out = out + get(t, ks[i])
+        end
+        i += 1
+    end
+    if !found is
+        if !first is out = out + "," end
+        out = out + quote(key) + ":" + raw
+    end
+    return out + "}"
+end
+
+;; Usuwa klucz.
+pub fn del(obj: string, key: string) -> string is
+    let t: string = string_trim(obj)
+    let ks: [string] = keys(t)
+    let mut out: string = "{"
+    let mut first: bool = true
+    let mut i: int = 0
+    while i < array_len(ks) is
+        if ks[i] != key is
+            if !first is out = out + "," end
+            first = false
+            out = out + quote(ks[i]) + ":" + get(t, ks[i])
+        end
+        i += 1
+    end
+    return out + "}"
+end
+
+;; Ustawia `a.b.c` zagnieżdżone (tworzy brakujące obiekty).
+pub fn pset(doc: string, p: string, raw: string) -> string is
+    let dot: int = string_find(p, ".")
+    if dot < 0 is return set(doc, p, raw) end
+    let head: string = string_slice(p, 0, dot)
+    let rest: string = string_slice(p, dot + 1, string_len(p))
+    let mut sub: string = get(doc, head)
+    if sub == "" is sub = "{}" end
+    return set(doc, head, pset(sub, rest, raw))
+end
+
+;; tablica JSON z listy tekstów
+pub fn str_array(xs: [string]) -> string is
+    let mut out: string = "["
+    let mut i: int = 0
+    while i < array_len(xs) is
+        if i > 0 is out = out + "," end
+        out = out + quote(xs[i])
+        i += 1
+    end
+    return out + "]"
+end
+
+pub fn str_list(arr: string) -> [string] is
+    let its: [string] = items(arr)
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(its) is
+        out = array_push(out, unq(its[i]))
+        i += 1
+    end
+    return out
+end
+
+;; pretty-print (wcięcia 2 spacje) — dla config.json czytelnego dla człowieka
+pub fn pretty(raw: string, indent: int) -> string is
+    let t: string = string_trim(raw)
+    if t == "" is return "" end
+    let c: string = string_at(t, 0)
+    let pad: string = string_repeat("  ", indent + 1)
+    let pad0: string = string_repeat("  ", indent)
+    if c == "{" is
+        let ks: [string] = keys(t)
+        if array_len(ks) == 0 is return "{}" end
+        let mut out: string = "{\n"
+        let mut i: int = 0
+        while i < array_len(ks) is
+            out = out + pad + quote(ks[i]) + ": " + pretty(get(t, ks[i]), indent + 1)
+            if i < array_len(ks) - 1 is out = out + "," end
+            out = out + "\n"
+            i += 1
+        end
+        return out + pad0 + "}"
+    end
+    if c == "[" is
+        let its: [string] = items(t)
+        if array_len(its) == 0 is return "[]" end
+        let mut out2: string = "[\n"
+        let mut j: int = 0
+        while j < array_len(its) is
+            out2 = out2 + pad + pretty(its[j], indent + 1)
+            if j < array_len(its) - 1 is out2 = out2 + "," end
+            out2 = out2 + "\n"
+            j += 1
+        end
+        return out2 + pad0 + "]"
+    end
+    return t
+end
