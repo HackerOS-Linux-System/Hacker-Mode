@@ -1,0 +1,615 @@
+mod util
+mod jsonlite
+mod vdf
+mod model
+mod settings
+mod covers
+mod playtime
+mod roblox
+
+;; ═══ Steam ═══════════════════════════════════════════════════════════════════
+
+fn steam_roots() -> [string] is
+    let h: string = util::home()
+    return [h + "/.steam/steam", h + "/.steam/root", h + "/.local/share/Steam",
+            h + "/.var/app/com.valvesoftware.Steam/.local/share/Steam",
+            h + "/.var/app/com.valvesoftware.Steam/.steam/steam"]
+end
+
+pub fn steam_root() -> string is
+    let rs: [string] = steam_roots()
+    let mut i: int = 0
+    while i < array_len(rs) is
+        if util::exists(rs[i] + "/steamapps") is return rs[i] end
+        i += 1
+    end
+    return ""
+end
+
+fn steam_libraries(root: string) -> [string] is
+    let mut libs: [string] = [root + "/steamapps"]
+    let content: string = util::read(root + "/steamapps/libraryfolders.vdf")
+    let paths: [string] = vdf::all(content, "path")
+    let mut i: int = 0
+    while i < array_len(paths) is
+        let p: string = paths[i] + "/steamapps"
+        if !util::has(libs, p) && util::exists(p) is libs = array_push(libs, p) end
+        i += 1
+    end
+    return libs
+end
+
+fn steam_is_tool(name: string) -> bool is
+    return string_starts_with(name, "Proton") || string_starts_with(name, "Steam Linux Runtime") ||
+        string_starts_with(name, "Steamworks Common") || name == "Steam Controller Configs"
+end
+
+fn steam_cover(root: string, appid: string) -> string is
+    let base: string = root + "/appcache/librarycache/" + appid
+    let direct: [string] = [base + "/library_600x900.jpg", base + "/library_600x900.png"]
+    let mut i: int = 0
+    while i < array_len(direct) is
+        if util::exists(direct[i]) is return direct[i] end
+        i += 1
+    end
+    ;; nowszy układ: librarycache/<appid>/<hash>/library_600x900.jpg
+    let found: string = util::sh("find " + util::sq(base) + " -maxdepth 2 -name 'library_600x900*' 2>/dev/null | head -n 1")
+    return found
+end
+
+pub fn steam_list(s: settings::Settings) -> [model::Game] is
+    let mut out: [model::Game] = []
+    let root: string = steam_root()
+    if root == "" is return out end
+    let libs: [string] = steam_libraries(root)
+    let mut li: int = 0
+    while li < array_len(libs) is
+        let files: [string] = util::ls(libs[li])
+        let mut i: int = 0
+        while i < array_len(files) is
+            if string_starts_with(files[i], "appmanifest_") && string_ends_with(files[i], ".acf") is
+                let c: string = util::read(libs[li] + "/" + files[i])
+                let appid: string = vdf::first(c, "appid")
+                let name: string = vdf::first(c, "name")
+                if appid != "" && name != "" && !steam_is_tool(name) is
+                    let mut g: model::Game = model::new_game("steam", appid, name)
+                    g.installed = true
+                    g.path = libs[li] + "/common/" + vdf::first(c, "installdir")
+                    g.cover = steam_cover(root, appid)
+                    out = array_push(out, g)
+                end
+            end
+            i += 1
+        end
+        li += 1
+    end
+    return out
+end
+
+;; biblioteka posiadanych gier przez Steam Web API (klucz + SteamID64 w ustawieniach)
+pub fn steam_owned(s: settings::Settings) -> [model::Game] is
+    let mut out: [model::Game] = []
+    let key: string = settings::get_str(s, "steam_api_key", "")
+    let sid: string = settings::get_str(s, "steam_id64", "")
+    if key == "" || sid == "" is return out end
+    let url: string = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=" + key + "&steamid=" + sid + "&format=json&include_appinfo=true&include_played_free_games=true"
+    let r: string = util::http_get(url, 20)
+    let rows: [string] = jsonlite::items(jsonlite::path(r, "response.games"))
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let appid: string = jsonlite::unq(jsonlite::get(rows[i], "appid"))
+        let name: string = jsonlite::gstr(rows[i], "name")
+        if appid != "" && name != "" && !steam_is_tool(name) is
+            let mut g: model::Game = model::new_game("steam", appid, name)
+            g.playtime = jsonlite::gint(rows[i], "playtime_forever")
+            g.cover = "https://cdn.cloudflare.steamstatic.com/steam/apps/" + appid + "/library_600x900.jpg"
+            out = array_push(out, g)
+        end
+        i += 1
+    end
+    return out
+end
+
+fn steam_bin() -> string is
+    if util::have("steam") is return "steam" end
+    return "flatpak run com.valvesoftware.Steam"
+end
+
+;; appid gry uruchomionej teraz w lokalnym kliencie (registry.vdf → RunningAppID) albo ""
+pub fn steam_running_appid() -> string is
+    let h: string = util::home()
+    let regs: [string] = [h + "/.steam/registry.vdf", h + "/.steam/steam/registry.vdf",
+                          h + "/.var/app/com.valvesoftware.Steam/.steam/registry.vdf"]
+    let mut i: int = 0
+    while i < array_len(regs) is
+        if util::exists(regs[i]) is
+            let v: string = vdf::first(util::read(regs[i]), "RunningAppID")
+            if v != "" && v != "0" is return v end
+        end
+        i += 1
+    end
+    return ""
+end
+
+;; ═══ Epic (legendary) ═══════════════════════════════════════════════════════
+
+fn epic_logged_in() -> bool is
+    if !util::have("legendary") is return false end
+    let r: string = shell("legendary status --json 2>/dev/null")
+    let acc: string = jsonlite::gstr(r, "account")
+    return acc != "" && acc != "<not logged in>"
+end
+
+fn epic_list() -> [model::Game] is
+    let mut out: [model::Game] = []
+    if !util::have("legendary") is return out end
+    let r: string = shell("legendary list-installed --json 2>/dev/null")
+    let rows: [string] = jsonlite::items(r)
+    let mut i: int = 0
+    while i < array_len(rows) is
+        if !jsonlite::gbool(rows[i], "is_dlc") is
+            let id: string = jsonlite::gstr(rows[i], "app_name")
+            let mut title: string = jsonlite::gstr(rows[i], "title")
+            if title == "" is title = id end
+            let mut g: model::Game = model::new_game("epic", id, title)
+            g.installed = true
+            g.path = jsonlite::gstr(rows[i], "install_path")
+            out = array_push(out, g)
+        end
+        i += 1
+    end
+    return out
+end
+
+fn epic_owned() -> [model::Game] is
+    let mut out: [model::Game] = []
+    if !epic_logged_in() is return out end
+    let r: string = shell("legendary list --json 2>/dev/null")
+    let rows: [string] = jsonlite::items(r)
+    let mut i: int = 0
+    while i < array_len(rows) is
+        if !jsonlite::gbool(rows[i], "is_dlc") is
+            let id: string = jsonlite::gstr(rows[i], "app_name")
+            let title: string = jsonlite::gstr(rows[i], "app_title")
+            if id != "" && title != "" is out = array_push(out, model::new_game("epic", id, title)) end
+        end
+        i += 1
+    end
+    return out
+end
+
+;; ═══ GOG (gogdl) ════════════════════════════════════════════════════════════
+
+fn gog_cfg() -> string is
+    return util::config_dir() + "/hacker-mode/gog"
+end
+
+fn gog_installed_path() -> string is
+    return gog_cfg() + "/installed.json"
+end
+
+fn gog_default_root() -> string is
+    return util::home() + "/Games/HackerMode-GOG"
+end
+
+fn gog_logged_in() -> bool is
+    return util::exists(gog_cfg() + "/auth.json")
+end
+
+fn gog_cover(id: string) -> string is
+    let r: string = util::http_get("https://api.gog.com/products/" + id + "?expand=images", 8)
+    let mut url: string = jsonlite::pstr(r, "images.logo2x")
+    if url == "" is url = jsonlite::pstr(r, "images.background") end
+    url = string_replace(url, "{" + "formatter}", "product_card_v2_mobile_slider_639")
+    return covers::cache_image(url, "gog-" + id)
+end
+
+fn gog_list() -> [model::Game] is
+    let mut out: [model::Game] = []
+    let doc: string = util::read(gog_installed_path())
+    let ks: [string] = jsonlite::keys(doc)
+    let mut i: int = 0
+    while i < array_len(ks) is
+        let e: string = jsonlite::get(doc, ks[i])
+        let mut g: model::Game = model::new_game("gog", ks[i], jsonlite::gstr(e, "title"))
+        g.installed = true
+        g.path = jsonlite::gstr(e, "install_path")
+        let cached: string = covers::dir() + "/gog-" + ks[i] + ".jpg"
+        if util::exists(cached) is g.cover = cached end
+        out = array_push(out, g)
+        i += 1
+    end
+    return out
+end
+
+pub fn gog_register_installed(id: string, title: string, path: string) is
+    let doc: string = string_trim(util::read(gog_installed_path()))
+    let base: string = if doc == "" then "{}" else doc
+    let entry: string = "{\"title\":" + jsonlite::quote(title) + ",\"install_path\":" + jsonlite::quote(path) + "}"
+    util::write_atomic(gog_installed_path(), jsonlite::pretty(jsonlite::set(base, id, entry), 0) + "\n", "")
+end
+
+pub fn gog_unregister(id: string) is
+    let doc: string = string_trim(util::read(gog_installed_path()))
+    if doc == "" is return end
+    util::write_atomic(gog_installed_path(), jsonlite::pretty(jsonlite::del(doc, id), 0) + "\n", "")
+end
+
+;; ═══ Amazon (nile) ══════════════════════════════════════════════════════════
+
+fn amazon_logged_in() -> bool is
+    if !util::have("nile") is return false end
+    return util::rc("nile library list") == 0
+end
+
+fn amazon_parse(r: string, installed: bool) -> [model::Game] is
+    let mut out: [model::Game] = []
+    let rows: [string] = jsonlite::items(r)
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let id: string = jsonlite::gstr(rows[i], "id")
+        let mut title: string = jsonlite::gstr(rows[i], "product_title")
+        if title == "" is title = jsonlite::gstr(rows[i], "title") end
+        if id != "" && title != "" is
+            let mut g: model::Game = model::new_game("amazon", id, title)
+            g.installed = installed
+            g.path = jsonlite::gstr(rows[i], "path")
+            out = array_push(out, g)
+        end
+        i += 1
+    end
+    return out
+end
+
+;; ═══ Lutris ═════════════════════════════════════════════════════════════════
+
+fn lutris_db() -> string is
+    return util::data_dir() + "/lutris/pga.db"
+end
+
+fn lutris_cover(slug: string) -> string is
+    let bases: [string] = [util::data_dir() + "/lutris", util::home() + "/.var/app/net.lutris.Lutris/data/lutris"]
+    let exts: [string] = ["jpg", "png", "webp"]
+    let mut b: int = 0
+    while b < array_len(bases) is
+        let mut e: int = 0
+        while e < array_len(exts) is
+            let p: string = bases[b] + "/coverart/" + slug + "." + exts[e]
+            if util::exists(p) is return p end
+            e += 1
+        end
+        b += 1
+    end
+    return ""
+end
+
+fn lutris_playtime(slug: string) -> int is
+    if !util::have("sqlite3") || !util::exists(lutris_db()) is return -1 end
+    let q: string = "SELECT playtime FROM games WHERE slug=" + "'" + string_replace(slug, "'", "''") + "'" + " AND playtime IS NOT NULL;"
+    let v: string = util::sh("sqlite3 -noheader " + util::sq(lutris_db()) + " " + util::sq(q))
+    if v == "" is return -1 end
+    ;; Lutris trzyma godziny (liczba zmiennoprzecinkowa)
+    let whole: int = str_to_int(util::before(v, "."))
+    let frac: string = util::after(v, ".")
+    let tenth: int = if frac == "" then 0 else str_to_int(string_slice(frac, 0, 1))
+    return whole * 60 + (tenth * 6)
+end
+
+fn lutris_list() -> [model::Game] is
+    let mut out: [model::Game] = []
+    if !util::have("lutris") is return out end
+    let r: string = shell("lutris -l --json 2>/dev/null")
+    let rows: [string] = jsonlite::items(r)
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let slug: string = jsonlite::gstr(rows[i], "slug")
+        let name: string = jsonlite::gstr(rows[i], "name")
+        if slug != "" && name != "" is
+            let mut g: model::Game = model::new_game("lutris", slug, name)
+            g.installed = true
+            g.path = jsonlite::gstr(rows[i], "directory")
+            g.cover = lutris_cover(slug)
+            g.playtime = lutris_playtime(slug)
+            out = array_push(out, g)
+        end
+        i += 1
+    end
+    return out
+end
+
+;; ═══ EA app i Battle.net (Wine) ═════════════════════════════════════════════
+
+fn ea_prefix(s: settings::Settings) -> string is
+    let explicit: string = util::expand(settings::get_str(s, "ea_wine_prefix", ""))
+    let mut cands: [string] = []
+    if explicit != "" is cands = array_push(cands, explicit) end
+    let h: string = util::home()
+    cands = array_push(cands, h + "/Games/ea-app")
+    cands = array_push(cands, h + "/Games/ea")
+    cands = array_push(cands, h + "/Games/EA App")
+    let mut i: int = 0
+    while i < array_len(cands) is
+        let base: string = cands[i] + "/drive_c/Program Files/Electronic Arts/EA Desktop/EA Desktop/"
+        if util::exists(base + "EALauncher.exe") || util::exists(base + "EADesktop.exe") is return cands[i] end
+        i += 1
+    end
+    return ""
+end
+
+fn ea_launcher_exe(prefix: string) -> string is
+    let base: string = prefix + "/drive_c/Program Files/Electronic Arts/EA Desktop/EA Desktop/"
+    if util::exists(base + "EALauncher.exe") is return base + "EALauncher.exe" end
+    return base + "EADesktop.exe"
+end
+
+pub fn bnet_prefix(s: settings::Settings) -> string is
+    let explicit: string = util::expand(settings::get_str(s, "battlenet_wine_prefix", ""))
+    let mut cands: [string] = []
+    if explicit != "" is cands = array_push(cands, explicit) end
+    let h: string = util::home()
+    cands = array_push(cands, h + "/Games/battlenet")
+    cands = array_push(cands, h + "/Games/battle-net")
+    cands = array_push(cands, h + "/Games/Battle.net")
+    let mut i: int = 0
+    while i < array_len(cands) is
+        if util::exists(cands[i] + "/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe") is return cands[i] end
+        i += 1
+    end
+    return ""
+end
+
+fn bnet_non_game(name: string) -> bool is
+    let n: string = string_lower(name)
+    let skip: [string] = ["battle.net", "common files", "installshield installation information", "internet explorer",
+        "windows nt", "windows mail", "windows media player", "windows photo viewer", "windowspowershell"]
+    return util::has(skip, n)
+end
+
+fn wine_dir_games(platform: string, dir: string, filter_bnet: bool, s: settings::Settings) -> [model::Game] is
+    let mut out: [model::Game] = []
+    let names: [string] = util::ls(dir)
+    let sorted: [string] = sort_strings(names)
+    let key: string = settings::get_str(s, "steamgriddb_api_key", "")
+    let mut i: int = 0
+    while i < array_len(sorted) is
+        let n: string = sorted[i]
+        if fs_is_dir(dir + "/" + n) && !(filter_bnet && bnet_non_game(n)) is
+            let mut g: model::Game = model::new_game(platform, n, n)
+            g.installed = true
+            g.path = dir + "/" + n
+            if key != "" is g.cover = covers::steamgriddb_cover(n, platform + "-" + n, key) end
+            out = array_push(out, g)
+        end
+        i += 1
+    end
+    return out
+end
+
+fn safe_game_dir_name(id: string) -> bool is
+    return id != "" && !string_contains(id, "/") && !string_contains(id, "\\") && !string_contains(id, "..")
+end
+
+;; ═══ Dostępność, lista, polecenia ═══════════════════════════════════════════
+
+pub fn is_available(s: settings::Settings, platform: string) -> bool is
+    if platform == "steam" is return steam_root() != "" end
+    if platform == "epic" is return util::have("legendary") end
+    if platform == "gog" is return util::have("gogdl") end
+    if platform == "amazon" is return util::have("nile") end
+    if platform == "lutris" is return util::have("lutris") end
+    if platform == "ea" is return util::have("wine") && ea_prefix(s) != "" end
+    if platform == "battlenet" is return util::have("wine") && bnet_prefix(s) != "" end
+    if platform == "roblox" is return true end
+    return false
+end
+
+pub fn is_logged_in(s: settings::Settings, platform: string) -> bool is
+    if platform == "steam" is return steam_root() != "" end
+    if platform == "epic" is return epic_logged_in() end
+    if platform == "gog" is return gog_logged_in() end
+    if platform == "amazon" is return amazon_logged_in() end
+    return true
+end
+
+pub fn supports_login(platform: string) -> bool is
+    return platform == "epic" || platform == "gog" || platform == "amazon"
+end
+
+;; adres logowania w oknie webview ("" = brak okna logowania)
+pub fn login_url(platform: string) -> string is
+    if platform == "epic" is
+        return "https://www.epicgames.com/id/login?redirectUrl=https%3A%2F%2Fwww.epicgames.com%2Fid%2Fapi%2Fredirect%3FclientId%3D34a02cf8f4414e29b15921876da36f9a%26responseType%3Dcode"
+    end
+    if platform == "gog" is
+        return "https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient&response_type=code&layout=client2"
+    end
+    return ""
+end
+
+;; Po przechwyceniu kodu autoryzacyjnego. Zwraca "" przy sukcesie, inaczej komunikat błędu.
+pub fn login_submit(platform: string, code: string) -> string is
+    let c: string = util::sq(code)
+    if platform == "epic" is
+        if util::rc("legendary auth --code " + c) == 0 is return "" end
+        return "legendary auth nie powiodło się"
+    end
+    if platform == "gog" is
+        util::mkdirp(gog_cfg())
+        if util::rc("gogdl --auth-config-path " + util::sq(gog_cfg()) + " auth --code " + c) == 0 is return "" end
+        return "gogdl auth nie powiodło się"
+    end
+    return "ta platforma nie używa kodu"
+end
+
+;; Pełna biblioteka wybranych platform (zainstalowane + posiadane-niezainstalowane), z lokalnym czasem gry.
+pub fn list_all(s: settings::Settings) -> [model::Game] is
+    let mut all: [model::Game] = []
+    let mut p: int = 0
+    let plats: [string] = model::all_platforms()
+    while p < array_len(plats) is
+        let slug: string = plats[p]
+        if settings::platform_enabled(s, slug) && is_available(s, slug) is
+            let mut part: [model::Game] = []
+            if slug == "steam" is
+                part = steam_list(s)
+                let owned: [model::Game] = steam_owned(s)
+                let mut o: int = 0
+                while o < array_len(owned) is
+                    let mut have: bool = false
+                    let mut q: int = 0
+                    while q < array_len(part) is
+                        if part[q].id == owned[o].id is
+                            have = true
+                            if part[q].playtime < 0 is part[q].playtime = owned[o].playtime end
+                        end
+                        q += 1
+                    end
+                    if !have is part = array_push(part, owned[o]) end
+                    o += 1
+                end
+            elsif slug == "epic" is
+                part = epic_list()
+                let owned2: [model::Game] = epic_owned()
+                let mut o2: int = 0
+                while o2 < array_len(owned2) is
+                    let mut have2: bool = false
+                    let mut q2: int = 0
+                    while q2 < array_len(part) is
+                        if part[q2].id == owned2[o2].id is have2 = true end
+                        q2 += 1
+                    end
+                    if !have2 is part = array_push(part, owned2[o2]) end
+                    o2 += 1
+                end
+            elsif slug == "gog" is
+                part = gog_list()
+            elsif slug == "amazon" is
+                let inst: [model::Game] = amazon_parse(shell("nile library list --installed --json 2>/dev/null"), true)
+                part = inst
+                let all_a: [model::Game] = amazon_parse(shell("nile library list --json 2>/dev/null"), false)
+                let mut o3: int = 0
+                while o3 < array_len(all_a) is
+                    let mut have3: bool = false
+                    let mut q3: int = 0
+                    while q3 < array_len(part) is
+                        if part[q3].id == all_a[o3].id is have3 = true end
+                        q3 += 1
+                    end
+                    if !have3 is part = array_push(part, all_a[o3]) end
+                    o3 += 1
+                end
+            elsif slug == "lutris" is
+                part = lutris_list()
+            elsif slug == "ea" is
+                part = wine_dir_games("ea", ea_prefix(s) + "/drive_c/Program Files/EA Games", false, s)
+            elsif slug == "battlenet" is
+                part = wine_dir_games("battlenet", bnet_prefix(s) + "/drive_c/Program Files (x86)", true, s)
+            elsif slug == "roblox" is
+                part = roblox::list_games(false)
+            end
+            let mut k: int = 0
+            while k < array_len(part) is
+                all = array_push(all, part[k])
+                k += 1
+            end
+        end
+        p += 1
+    end
+    playtime::merge_into(all)
+    return all
+end
+
+;; ── polecenia uruchomienia / instalacji / odinstalowania ─────────────────────
+;; Zwracają linię powłoki albo "!komunikat błędu".
+
+pub fn launch_command(s: settings::Settings, platform: string, id: string) -> string is
+    if platform == "steam" is return steam_bin() + " -applaunch " + util::sq(id) end
+    if platform == "epic" is return "legendary launch " + util::sq(id) end
+    if platform == "gog" is
+        let doc: string = util::read(gog_installed_path())
+        let path: string = jsonlite::gstr(jsonlite::get(doc, id), "install_path")
+        if path == "" is return "!GOG: gra nie jest zainstalowana" end
+        return "gogdl --auth-config-path " + util::sq(gog_cfg()) + " launch " + util::sq(path) + " " + util::sq(id) + " --platform linux"
+    end
+    if platform == "amazon" is return "nile launch " + util::sq(id) end
+    if platform == "lutris" is return "lutris lutris:rungame/" + util::sq(id) end
+    if platform == "ea" is
+        let pre: string = ea_prefix(s)
+        if pre == "" is return "!EA app: nie znaleziono prefiksu Wine" end
+        return "env WINEPREFIX=" + util::sq(pre) + " wine " + util::sq(ea_launcher_exe(pre))
+    end
+    if platform == "battlenet" is
+        let pre2: string = bnet_prefix(s)
+        if pre2 == "" is return "!Battle.net: nie znaleziono prefiksu Wine" end
+        return "env WINEPREFIX=" + util::sq(pre2) + " wine " + util::sq(pre2 + "/drive_c/Program Files (x86)/Battle.net/Battle.net Launcher.exe")
+    end
+    if platform == "roblox" is
+        return roblox::open_command(s, id, "")
+    end
+    return "!nieznana platforma: " + platform
+end
+
+pub fn install_command(s: settings::Settings, platform: string, id: string) -> string is
+    if platform == "steam" is return steam_bin() + " steam://install/" + util::sq(id) end
+    if platform == "epic" is return "legendary install " + util::sq(id) + " -y" end
+    if platform == "gog" is
+        util::mkdirp(gog_cfg())
+        let dir: string = gog_default_root() + "/" + id
+        util::mkdirp(dir)
+        return "gogdl --auth-config-path " + util::sq(gog_cfg()) + " download " + util::sq(id) + " --platform linux --path=" + util::sq(dir) + " --lang=en --skip-dlcs"
+    end
+    if platform == "amazon" is return "nile install " + util::sq(id) end
+    if platform == "lutris" is return "lutris lutris:" + util::sq(id) end
+    if platform == "ea" || platform == "battlenet" is return launch_command(s, platform, id) end
+    if platform == "roblox" is return roblox::install_client_command() end
+    return "!nieznana platforma: " + platform
+end
+
+pub fn uninstall_command(s: settings::Settings, platform: string, id: string) -> string is
+    if platform == "steam" is return steam_bin() + " steam://uninstall/" + util::sq(id) end
+    if platform == "epic" is return "legendary uninstall " + util::sq(id) + " -y" end
+    if platform == "gog" is
+        let doc: string = util::read(gog_installed_path())
+        let path: string = jsonlite::gstr(jsonlite::get(doc, id), "install_path")
+        if path == "" || path == "/" is return "!GOG: brak ścieżki instalacji" end
+        return "rm -rf -- " + util::sq(path)
+    end
+    if platform == "amazon" is return "nile uninstall " + util::sq(id) end
+    if platform == "lutris" is
+        return "!Lutris: odinstaluj grę w aplikacji Lutris (usuwanie plików wymaga potwierdzenia)"
+    end
+    if platform == "ea" is
+        let pre: string = ea_prefix(s)
+        if pre == "" || !safe_game_dir_name(id) is return "!EA app: nieprawidłowa gra" end
+        return "rm -rf -- " + util::sq(pre + "/drive_c/Program Files/EA Games/" + id)
+    end
+    if platform == "battlenet" is
+        let pre2: string = bnet_prefix(s)
+        if pre2 == "" || !safe_game_dir_name(id) || bnet_non_game(id) is return "!Battle.net: nieprawidłowa gra" end
+        return "rm -rf -- " + util::sq(pre2 + "/drive_c/Program Files (x86)/" + id)
+    end
+    if platform == "roblox" is
+        roblox::unpin(id)
+        return "true"
+    end
+    return "!nieznana platforma: " + platform
+end
+
+;; po udanej instalacji / odinstalowaniu (rejestr GOG)
+pub fn on_install_finished(platform: string, id: string, title: string) is
+    if platform == "gog" is gog_register_installed(id, title, gog_default_root() + "/" + id) end
+end
+
+pub fn on_uninstall_finished(platform: string, id: string) is
+    if platform == "gog" is gog_unregister(id) end
+end
+
+;; polecenia klienta sklepu (przycisk "Otwórz klienta")
+pub fn client_command(s: settings::Settings, platform: string) -> string is
+    if platform == "steam" is return steam_bin() end
+    if platform == "epic" || platform == "gog" is return "flatpak run com.heroicgameslauncher.hgl" end
+    if platform == "lutris" is return "lutris" end
+    if platform == "ea" is return launch_command(s, "ea", "") end
+    if platform == "battlenet" is return launch_command(s, "battlenet", "") end
+    return ""
+end
