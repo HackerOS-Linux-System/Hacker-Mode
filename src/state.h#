@@ -1,0 +1,79 @@
+mod settings
+mod model
+mod jobs
+mod roblox
+mod gfx
+
+pub struct App is
+    pub s:            settings::Settings
+    pub dev:          bool
+    pub lang:         string
+    pub tab:          string          ;; library | roblox | settings | doctor
+    pub games:        [model::Game]
+    pub loaded:       bool
+    pub busy:         string          ;; komunikat, gdy trwa operacja blokująca
+    pub filter:       string          ;; "" = wszystkie platformy
+    pub query:        string
+    pub page:         int
+    pub selected:     string          ;; klucz gry w panelu szczegółów
+    pub jobs:         [jobs::Job]
+    pub toast:        string
+    pub toast_until:  int
+    pub confirm:      string          ;; oczekujące potwierdzenie: uninstall:<klucz> | power:<akcja> | unpin:<place>
+    pub rb_query:     string
+    pub rb_results:   [roblox::Info]
+    pub rb_mode:      string          ;; mine | search
+    pub rb_link:      string
+    pub rb_user:      string
+    pub rb_sel:       string          ;; place id wybranego doświadczenia
+    pub rb_info:      roblox::Info    ;; szczegóły wybranego
+    pub doctor:       [string]
+    pub volume:       int
+    pub battery:      int
+    pub input_steam:  string
+    pub input_steamid: string
+    pub input_sgdb:   string
+    pub quit:         bool
+    pub theme_changed: string         ;; nazwa motywu do zastosowania przez pętlę okna
+    pub win:          gfx::Win
+end
+
+pub fn new_app(s: settings::Settings, dev: bool, win: gfx::Win) -> App is
+    return App { s: s, dev: dev, lang: settings::language(s), tab: "library", games: [], loaded: false, busy: "",
+        filter: "", query: "", page: 0, selected: "", jobs: [], toast: "", toast_until: 0, confirm: "",
+        rb_query: "", rb_results: [], rb_mode: "mine", rb_link: "", rb_user: "", rb_sel: "", rb_info: roblox::empty_info(),
+        doctor: [], volume: -1, battery: -1, input_steam: "", input_steamid: "", input_sgdb: "", quit: false, theme_changed: "", win: win }
+end
+
+pub fn say(a: App, msg: string) is
+    a.toast = msg
+    a.toast_until = now_unix() + 6
+end
+
+pub fn find_game(a: App, key: string) -> model::Game is
+    let mut i: int = 0
+    while i < array_len(a.games) is
+        if model::key(a.games[i]) == key is return a.games[i] end
+        i += 1
+    end
+    return model::new_game("", "", "")
+end
+
+;; zadanie aktywne dla gry (klucz platform:id) albo puste zadanie (id == "")
+pub fn job_for(a: App, key: string) -> jobs::Job is
+    let mut i: int = 0
+    while i < array_len(a.jobs) is
+        if !a.jobs[i].done && jobs::key(a.jobs[i]) == key is return a.jobs[i] end
+        i += 1
+    end
+    return jobs::empty()
+end
+
+pub fn any_game_running(a: App) -> bool is
+    let mut i: int = 0
+    while i < array_len(a.jobs) is
+        if !a.jobs[i].done && a.jobs[i].kind == "game" is return true end
+        i += 1
+    end
+    return false
+end
