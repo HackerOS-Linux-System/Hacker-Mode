@@ -1,0 +1,34 @@
+mod util
+
+;; para (klucz, wartość) z linii `"klucz"<tab>"wartość"`; ["", ""] gdy to nie jest para
+pub fn pair(line: string) -> [string] is
+    let parts: [string] = string_split(line, "\"")
+    if array_len(parts) >= 4 is return [parts[1], parts[3]] end
+    if array_len(parts) == 3 is return [parts[1], ""] end
+    return ["", ""]
+end
+
+;; pierwsza wartość klucza (bez uwzględniania zagnieżdżenia)
+pub fn first(content: string, key: string) -> string is
+    let ls: [string] = string_split(content, "\n")
+    let mut i: int = 0
+    while i < array_len(ls) is
+        let kv: [string] = pair(ls[i])
+        if kv[0] == key && kv[1] != "" is return kv[1] end
+        i += 1
+    end
+    return ""
+end
+
+;; wszystkie wartości klucza
+pub fn all(content: string, key: string) -> [string] is
+    let ls: [string] = string_split(content, "\n")
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(ls) is
+        let kv: [string] = pair(ls[i])
+        if kv[0] == key && kv[1] != "" is out = array_push(out, kv[1]) end
+        i += 1
+    end
+    return out
+end
