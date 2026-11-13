@@ -1,0 +1,381 @@
+mod util
+mod jsonlite
+mod model
+mod covers
+mod settings
+mod playtime
+
+pub fn sober_id() -> string is return "org.vinegarhq.Sober" end
+
+pub struct Info is
+    pub place:    string
+    pub universe: string
+    pub name:     string
+    pub creator:  string
+    pub genre:    string
+    pub desc:     string
+    pub playing:  int
+    pub visits:   int
+    pub favs:     int
+    pub likes:    int      ;; % pozytywnych ocen, -1 = brak
+    pub icon:     string   ;; lokalna ścieżka ikony ("" = brak)
+end
+
+pub fn empty_info() -> Info is
+    return Info { place: "", universe: "", name: "", creator: "", genre: "", desc: "", playing: 0, visits: 0, favs: 0, likes: -1, icon: "" }
+end
+
+;; ── wykrywanie klienta ───────────────────────────────────────────────────────
+
+pub fn flatpak_available() -> bool is
+    return util::have("flatpak")
+end
+
+pub fn sober_installed() -> bool is
+    if !flatpak_available() is return false end
+    return util::rc("flatpak info " + sober_id()) == 0
+end
+
+pub fn arch_ok() -> bool is
+    return util::sh("uname -m") == "x86_64"
+end
+
+;; czy schemat roblox:// ma przypisaną aplikację
+pub fn handler_registered() -> bool is
+    return util::sh("xdg-mime query default x-scheme-handler/roblox 2>/dev/null") != ""
+end
+
+pub fn vulkan_ok() -> bool is
+    if util::have("vulkaninfo") is return util::rc("vulkaninfo --summary") == 0 end
+    return util::rc("ls /usr/share/vulkan/icd.d /etc/vulkan/icd.d") == 0
+end
+
+;; Sober działa teraz?
+pub fn running() -> bool is
+    if !flatpak_available() is return false end
+    let out: string = shell("flatpak ps --columns=application 2>/dev/null")
+    return string_contains(out, sober_id())
+end
+
+;; ── polecenia ────────────────────────────────────────────────────────────────
+
+pub fn launch_uri(place: string, link_code: string) -> string is
+    let mut u: string = "roblox://experiences/start?placeId=" + place
+    if link_code != "" is u = u + "&linkCode=" + link_code end
+    return u
+end
+
+;; Polecenie otwierające URI. `roblox_command` w config.json może je nadpisać ({uri}, {place}).
+pub fn open_command(s: settings::Settings, place: string, link_code: string) -> string is
+    let uri: string = launch_uri(place, link_code)
+    let custom: string = settings::get_str(s, "roblox_command", "")
+    if custom != "" is
+        return string_replace(string_replace(custom, "{uri}", util::sq(uri)), "{place}", place)
+    end
+    if sober_installed() is
+        ;; ta sama linia co w oficjalnym wpisie .desktop Sobera (MimeType=x-scheme-handler/roblox)
+        return "flatpak run --command=sober --file-forwarding " + sober_id() + " --@@u " + util::sq(uri) + " @@"
+    end
+    return "xdg-open " + util::sq(uri)
+end
+
+pub fn stop_command() -> string is
+    return "flatpak kill " + sober_id()
+end
+
+pub fn install_client_command() -> string is
+    return "flatpak install -y --noninteractive flathub " + sober_id()
+end
+
+pub fn uninstall_client_command() -> string is
+    return "flatpak uninstall -y --noninteractive " + sober_id()
+end
+
+;; ── konfiguracja Sobera ──────────────────────────────────────────────────────
+
+pub fn sober_config_path() -> string is
+    return util::home() + "/.var/app/" + sober_id() + "/config/sober/config.json"
+end
+
+pub fn sober_logs_dir() -> string is
+    return util::home() + "/.var/app/" + sober_id() + "/data/sober/sober_logs"
+end
+
+pub fn sober_flag(key: string, dflt: bool) -> bool is
+    let raw: string = jsonlite::get(util::read(sober_config_path()), key)
+    if raw == "" is return dflt end
+    return jsonlite::to_bool(raw)
+end
+
+pub fn set_sober_flag(key: string, v: bool) is
+    let cur: string = string_trim(util::read(sober_config_path()))
+    let base: string = if cur == "" then "{}" else cur
+    util::write_atomic(sober_config_path(), jsonlite::pretty(jsonlite::set(base, key, if v then "true" else "false"), 0) + "\n", "")
+end
+
+;; ── zapis biblioteki ─────────────────────────────────────────────────────────
+
+fn store_path() -> string is
+    return util::data_dir() + "/hacker-mode/roblox.tsv"
+end
+
+;; place \t universe \t nazwa \t data dodania
+fn read_rows() -> [string] is
+    return util::lines(util::read(store_path()))
+end
+
+fn write_rows(rows: [string]) is
+    util::write_atomic(store_path(), util::join(rows, "\n") + "\n", "")
+end
+
+pub fn is_pinned(place: string) -> bool is
+    let rows: [string] = read_rows()
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let p: [string] = string_split(rows[i], "\t")
+        if p[0] == place is return true end
+        i += 1
+    end
+    return false
+end
+
+pub fn pin(place: string, universe: string, name: string) is
+    if place == "" || is_pinned(place) is return end
+    let mut rows: [string] = read_rows()
+    rows = array_push(rows, place + "\t" + universe + "\t" + util::tsv_esc(name) + "\t" + to_string(now_unix()))
+    write_rows(rows)
+end
+
+pub fn unpin(place: string) is
+    let rows: [string] = read_rows()
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let p: [string] = string_split(rows[i], "\t")
+        if p[0] != place is out = array_push(out, rows[i]) end
+        i += 1
+    end
+    write_rows(out)
+end
+
+;; ── API Roblox ───────────────────────────────────────────────────────────────
+
+;; kolejne liczby po `marker` (np. "\"universeId\":"), bez duplikatów
+pub fn numbers_after(raw: string, marker: string, limit: int) -> [string] is
+    let mut out: [string] = []
+    let mut from: int = 0
+    let n: int = string_len(raw)
+    while from < n && array_len(out) < limit is
+        let rest: string = string_slice(raw, from, n)
+        let at: int = string_find(rest, marker)
+        if at < 0 is return out end
+        let mut k: int = at + string_len(marker)
+        while k < string_len(rest) && string_at(rest, k) == " " is k += 1 end
+        let mut num: string = ""
+        while k < string_len(rest) && string_contains("0123456789", string_at(rest, k)) is
+            num = num + string_at(rest, k)
+            k += 1
+        end
+        if num != "" && !util::has(out, num) is out = array_push(out, num) end
+        from = from + k
+        if k == 0 is from = from + 1 end
+    end
+    return out
+end
+
+;; z linku / tekstu: numer miejsca (place id) i opcjonalny kod prywatnego serwera
+pub fn parse_input(text: string) -> [string] is
+    let t: string = string_trim(text)
+    let mut place: string = ""
+    let mut code: string = ""
+    if string_contains(t, "/games/") is
+        place = util::digits_only(util::before(util::after(t, "/games/"), "/"))
+        place = util::before(place, "?")
+    elsif string_contains(t, "placeId=") is
+        place = util::digits_only(util::before(util::after(t, "placeId="), "&"))
+    elsif util::is_digits(t) is
+        place = t
+    end
+    if string_contains(t, "privateServerLinkCode=") is
+        code = util::before(util::after(t, "privateServerLinkCode="), "&")
+    elsif string_contains(t, "linkCode=") is
+        code = util::before(util::after(t, "linkCode="), "&")
+    end
+    return [place, code]
+end
+
+pub fn universe_of(place: string) -> string is
+    let r: string = util::http_get("https://apis.roblox.com/universes/v1/places/" + place + "/universe", 10)
+    return jsonlite::unq(jsonlite::get(r, "universeId"))
+end
+
+;; Ikony (512x512) dla listy universeId -> pliki w cache; zwraca "universeId|ścieżka" dla każdego
+pub fn icons(universes: [string]) -> [string] is
+    let mut out: [string] = []
+    if array_len(universes) == 0 is return out end
+    let url: string = "https://thumbnails.roblox.com/v1/games/icons?universeIds=" + util::join(universes, ",") + "&returnPolicy=PlaceHolder&size=512x512&format=Png&isCircular=false"
+    let r: string = util::http_get(url, 12)
+    let rows: [string] = jsonlite::items(jsonlite::get(r, "data"))
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let id: string = jsonlite::unq(jsonlite::get(rows[i], "targetId"))
+        let img: string = jsonlite::gstr(rows[i], "imageUrl")
+        if id != "" && img != "" is
+            let path: string = covers::cache_image(img, "roblox-" + id)
+            if path != "" is out = array_push(out, id + "|" + path) end
+        end
+        i += 1
+    end
+    return out
+end
+
+fn icon_for(table: [string], universe: string) -> string is
+    let mut i: int = 0
+    while i < array_len(table) is
+        if string_starts_with(table[i], universe + "|") is return util::after(table[i], "|") end
+        i += 1
+    end
+    return ""
+end
+
+fn likes_for(votes: string, universe: string) -> int is
+    let rows: [string] = jsonlite::items(jsonlite::get(votes, "data"))
+    let mut i: int = 0
+    while i < array_len(rows) is
+        if jsonlite::unq(jsonlite::get(rows[i], "id")) == universe is
+            let up: int = jsonlite::gint(rows[i], "upVotes")
+            let down: int = jsonlite::gint(rows[i], "downVotes")
+            if up + down == 0 is return -1 end
+            return (up * 100) / (up + down)
+        end
+        i += 1
+    end
+    return -1
+end
+
+;; Szczegóły doświadczeń (do 50 naraz) + oceny + ikony.
+pub fn details(universes: [string], with_icons: bool) -> [Info] is
+    let mut out: [Info] = []
+    if array_len(universes) == 0 is return out end
+    let ids: string = util::join(universes, ",")
+    let r: string = util::http_get("https://games.roblox.com/v1/games?universeIds=" + ids, 12)
+    let rows: [string] = jsonlite::items(jsonlite::get(r, "data"))
+    if array_len(rows) == 0 is return out end
+    let votes: string = util::http_get("https://games.roblox.com/v1/games/votes?universeIds=" + ids, 10)
+    let mut table: [string] = []
+    if with_icons is table = icons(universes) end
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let mut d: Info = empty_info()
+        d.universe = jsonlite::unq(jsonlite::get(rows[i], "id"))
+        d.place = jsonlite::unq(jsonlite::get(rows[i], "rootPlaceId"))
+        d.name = jsonlite::gstr(rows[i], "name")
+        d.desc = jsonlite::gstr(rows[i], "description")
+        d.creator = jsonlite::pstr(rows[i], "creator.name")
+        d.genre = jsonlite::gstr(rows[i], "genre")
+        d.playing = jsonlite::gint(rows[i], "playing")
+        d.visits = jsonlite::gint(rows[i], "visits")
+        d.favs = jsonlite::gint(rows[i], "favoritedCount")
+        d.likes = likes_for(votes, d.universe)
+        d.icon = icon_for(table, d.universe)
+        out = array_push(out, d)
+        i += 1
+    end
+    return out
+end
+
+;; Wyszukiwarka doświadczeń (omni-search); zwraca szczegóły pierwszych `limit` wyników.
+pub fn search(query: string, limit: int) -> [Info] is
+    let q: string = string_trim(query)
+    if q == "" is return [] end
+    let session: string = "hm-" + to_string(now_ms())
+    let url: string = "https://apis.roblox.com/search-api/omni-search?searchQuery=" + url_encode(q) + "&sessionId=" + session + "&pageType=all"
+    let r: string = util::http_get(url, 12)
+    let ids: [string] = numbers_after(r, "\"universeId\":", limit)
+    return details(ids, true)
+end
+
+;; Dodaje doświadczenie po linku / numerze miejsca. Zwraca komunikat dla użytkownika ("" = OK, "ok:<nazwa>").
+pub fn add_from_input(text: string) -> string is
+    let pi: [string] = parse_input(text)
+    let place: string = pi[0]
+    if place == "" is return "Podaj link roblox.com/games/… albo numer miejsca (place id)." end
+    let universe: string = universe_of(place)
+    if universe == "" is return "Nie znaleziono doświadczenia o numerze " + place + " (sprawdź połączenie z internetem)." end
+    let d: [Info] = details([universe], true)
+    if array_len(d) == 0 is return "Roblox nie zwrócił danych dla tego doświadczenia." end
+    pin(place, universe, d[0].name)
+    return "ok:" + d[0].name
+end
+
+;; Publiczne ulubione użytkownika -> przypina je do biblioteki. Zwraca liczbę dodanych albo -1 przy błędzie.
+pub fn import_favorites(username: string) -> int is
+    let body: string = "{\"usernames\":[" + jsonlite::quote(string_trim(username)) + "],\"excludeBannedUsers\":true}"
+    let r: string = util::http_post_json("https://users.roblox.com/v1/usernames/users", body, 10)
+    let uid: string = jsonlite::unq(jsonlite::path(r, "data.0.id"))
+    if uid == "" is return -1 end
+    let fav: string = util::http_get("https://games.roblox.com/v2/users/" + uid + "/favorite/games?limit=50&sortOrder=Desc", 12)
+    let rows: [string] = jsonlite::items(jsonlite::get(fav, "data"))
+    let mut added: int = 0
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let universe: string = jsonlite::unq(jsonlite::get(rows[i], "id"))
+        let place: string = jsonlite::unq(jsonlite::path(rows[i], "rootPlace.id"))
+        let name: string = jsonlite::gstr(rows[i], "name")
+        if universe != "" && place != "" && !is_pinned(place) is
+            pin(place, universe, name)
+            added += 1
+        end
+        i += 1
+    end
+    return added
+end
+
+;; ── lista gier dla biblioteki Hacker Mode ────────────────────────────────────
+
+pub fn list_games(refresh_icons: bool) -> [model::Game] is
+    let rows: [string] = read_rows()
+    let mut out: [model::Game] = []
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let p: [string] = string_split(rows[i], "\t")
+        if array_len(p) >= 3 is
+            let mut g: model::Game = model::new_game("roblox", p[0], util::tsv_unesc(p[2]))
+            g.installed = true
+            g.extra = p[1]
+            let cached: string = covers::dir() + "/roblox-" + p[1] + ".png"
+            if util::exists(cached) is g.cover = cached end
+            out = array_push(out, g)
+        end
+        i += 1
+    end
+    if refresh_icons is
+        ;; brakujące ikony pobieramy hurtem
+        let mut missing: [string] = []
+        let mut j: int = 0
+        while j < array_len(out) is
+            if out[j].cover == "" && out[j].extra != "" is missing = array_push(missing, out[j].extra) end
+            j += 1
+        end
+        if array_len(missing) > 0 is
+            let table: [string] = icons(missing)
+            let mut k: int = 0
+            while k < array_len(out) is
+                if out[k].cover == "" is out[k].cover = icon_for(table, out[k].extra) end
+                k += 1
+            end
+        end
+    end
+    return out
+end
+
+;; Informacja do doktora: lista kroków {nazwa, ok, podpowiedź}
+pub fn doctor() -> [string] is
+    let mut out: [string] = []
+    out = array_push(out, "Flatpak|" + (if flatpak_available() then "1" else "0") + "|Zainstaluj flatpak (np. sudo apt install flatpak) i dodaj Flathub.")
+    out = array_push(out, "Architektura x86_64|" + (if arch_ok() then "1" else "0") + "|Sober wspiera oficjalnie tylko x86_64.")
+    out = array_push(out, "Sober (" + sober_id() + ")|" + (if sober_installed() then "1" else "0") + "|flatpak install flathub " + sober_id())
+    out = array_push(out, "Vulkan|" + (if vulkan_ok() then "1" else "0") + "|Zainstaluj sterowniki Vulkan (mesa-vulkan-drivers / sterownik NVIDIA).")
+    out = array_push(out, "Schemat roblox://|" + (if handler_registered() then "1" else "0") + "|xdg-mime default " + sober_id() + ".desktop x-scheme-handler/roblox")
+    return out
+end
