@@ -1,0 +1,130 @@
+use "bit -> webview" from "webview"
+
+mod util
+mod stores
+
+;; JS wstrzykiwany do każdej strony: wykrywa kod autoryzacji w adresie albo w treści odpowiedzi JSON (Epic).
+fn watcher_js() -> string is
+    return "(function(){if(window.__hm)return;window.__hm=true;window.__sent=false;" +
+        "function tick(){if(window.__sent||!window.hm_code)return;var c=null;" +
+        "var m=location.href.match(/[?&]code=([^&#]+)/);if(m){c=decodeURIComponent(m[1]);}" +
+        "else if(document.body){var t=document.body.innerText||'';var n=t.match(/authorizationCode\"\\s*:\\s*\"([^\"]+)\"/);if(n){c=n[1];}}" +
+        "if(c){window.__sent=true;window.hm_code(c);}}" +
+        "setInterval(tick,500);})();"
+end
+
+;; wątek roboczy: czeka na kod z JS, loguje przez CLI sklepu i zamyka okno
+async fn worker(w: webview::Webview, platform: string) -> int is
+    let mut result: int = 1
+    let mut go: bool = true
+    while go is
+        let ev: webview::Event = webview::next(w, 500)
+        if ev.kind < 0 is
+            go = false
+        elsif ev.kind > 0 && ev.name == "hm_code" is
+            let code: string = webview::arg_str(ev.req, 0)
+            webview::respond(w, ev.id, true, "null")
+            let err: string = stores::login_submit(platform, code)
+            if err == "" is
+                println("ok")
+                result = 0
+            else is
+                println("error: " + err)
+            end
+            webview::stop(w)
+            go = false
+        end
+    end
+    return result
+end
+
+;; Amazon: `nile auth --login` sam czeka na zakończenie logowania; my pokazujemy tylko adres w oknie.
+async fn amazon_waiter(w: webview::Webview, status: string) -> int is
+    let mut go: bool = true
+    while go is
+        let ev: webview::Event = webview::next(w, 500)
+        if ev.kind < 0 is
+            go = false
+        elsif util::exists(status) is
+            webview::stop(w)
+            go = false
+        end
+    end
+    return 0
+end
+
+fn open_window(title: string) -> webview::Webview is
+    let w: webview::Webview = webview::open(false)
+    if webview::is_valid(w) is
+        webview::set_window_title(w, title)
+        webview::set_window_size(w, 900, 720, webview::hint_none())
+    end
+    return w
+end
+
+fn run_amazon() -> int is
+    if !util::have("nile") is
+        println("error: brak polecenia nile")
+        return 1
+    end
+    let dir: string = util::cache_dir() + "/hacker-mode/jobs"
+    util::mkdirp(dir)
+    let log: string = dir + "/amazon-login.log"
+    let status: string = dir + "/amazon-login.status"
+    util::rc("rm -f " + util::sq(log) + " " + util::sq(status))
+    util::sh("setsid sh -c " + util::sq("nile auth --login > " + util::sq(log) + " 2>&1; echo $? > " + util::sq(status)) + " > /dev/null 2>&1 < /dev/null & echo started")
+    let mut url: string = ""
+    let mut tries: int = 0
+    while url == "" && tries < 40 is
+        let text: string = util::read(log)
+        let at: int = string_find(text, "https://")
+        if at >= 0 is
+            url = util::before(util::before(string_slice(text, at, string_len(text)), "\n"), " ")
+        end
+        if url == "" is sleep_ms(500) end
+        tries += 1
+    end
+    if url == "" is
+        println("error: nile nie podał adresu logowania")
+        return 1
+    end
+    let w: webview::Webview = open_window("Logowanie — Amazon Games")
+    if !webview::is_valid(w) is
+        println("error: nie można utworzyć okna webview")
+        return 1
+    end
+    webview::load_url(w, url)
+    let waiter = amazon_waiter(w, status)
+    webview::run_ui(w)
+    await waiter
+    webview::close(w)
+    let rc: string = util::sh("cat " + util::sq(status) + " 2>/dev/null")
+    if rc == "0" is
+        println("ok")
+        return 0
+    end
+    println("error: logowanie Amazon nie zostało dokończone")
+    return 1
+end
+
+pub fn run(platform: string) -> int is
+    if platform == "amazon" is return run_amazon() end
+    let url: string = stores::login_url(platform)
+    if url == "" is
+        println("error: platforma " + platform + " nie ma logowania w oknie")
+        return 1
+    end
+    let w: webview::Webview = open_window("Logowanie — " + platform)
+    if !webview::is_valid(w) is
+        println("error: nie można utworzyć okna webview")
+        return 1
+    end
+    webview::bind_raw(w, "hm_code")
+    webview::init_js(w, watcher_js())
+    webview::load_url(w, url)
+    let t = worker(w, platform)
+    webview::run_ui(w)
+    let rc: int = await t
+    webview::close(w)
+    return rc
+end
