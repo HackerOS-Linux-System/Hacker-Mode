@@ -1,0 +1,545 @@
+mod util
+mod ui
+mod model
+mod state
+mod settings
+mod jobs
+mod roblox
+mod playtime
+mod stores
+
+fn t(a: state::App, pl: string) -> string is
+    return ui::tr(a.lang, pl)
+end
+
+;; ── elementy wspólne ─────────────────────────────────────────────────────────
+
+fn tab_button(a: state::App, v: ui::View, name: string, label: string, icon: string) is
+    ui::btn(v, t(a, label), "tab:" + name, if a.tab == name then "tab tab-on" else "tab", icon)
+end
+
+fn topbar(a: state::App, v: ui::View) is
+    ui::open(v, "container", "", ui::a("id", "topbar") + ui::a("class", "glass") + ui::a("padxy", "26,14") + ui::a("fillw", "1"))
+    ui::open(v, "row", "", ui::a("spacing", "10") + ui::a("ay", "1") + ui::a("fillw", "1"))
+    ui::leaf(v, "text", "HACKER MODE", ui::a("size", "22") + ui::a("bold", "1") + ui::a("lsp", "2"))
+    ui::gap(v, 18)
+    tab_button(a, v, "library", "Biblioteka", "layout-grid")
+    tab_button(a, v, "roblox", "Roblox", "globe")
+    tab_button(a, v, "settings", "Ustawienia", "settings")
+    tab_button(a, v, "doctor", "Diagnostyka", "info")
+    ui::grow(v)
+    if a.volume >= 0 is ui::leaf(v, "text", "vol " + to_string(a.volume) + "%", ui::a("class", "muted")) end
+    if a.battery >= 0 is ui::leaf(v, "text", "bat " + to_string(a.battery) + "%", ui::a("class", "muted")) end
+    ui::btn(v, "", "refresh", "ghost icon", "refresh-cw")
+    ui::btn(v, "", "exit", "ghost icon", "log-out")
+    ui::close(v)
+    ui::close(v)
+end
+
+;; kafelek z okładką (przycisk, więc działa z klawiaturą i padem)
+fn tile(v: ui::View, id: string, cover: string, title: string, sub: string, w: int, h: int, platform: string, dim: bool) is
+    ui::open(v, "button_with", "", ui::a("press", id) + ui::a("class", "tile") + ui::a("focusable", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "0") + ui::a("clip", "1") + ui::a("radius", "18"))
+    if cover != "" is
+        ui::leaf(v, "image", cover, ui::a("wh", to_string(w) + "," + to_string(h)) + ui::a("fit", "1") + (if dim then ui::a("opacity", "0.45") else ""))
+    else is
+        ui::open(v, "container", "", ui::a("wh", to_string(w) + "," + to_string(h)) + ui::a("grad", "#1f2335,#2f3549,90") + ui::a("center", "1"))
+        ui::leaf(v, "icon", model::icon(platform), ui::a("size", "44") + ui::a("fg", model::accent(platform)))
+        ui::close(v)
+    end
+    ui::open(v, "container", "", ui::a("pad", "10") + ui::a("w", "px:" + to_string(w)))
+    ui::open(v, "column", "", ui::a("spacing", "3"))
+    ui::leaf(v, "text", util::clip(title, 26), ui::a("size", "14") + ui::a("bold", "1") + ui::a("nowrap", "1"))
+    if sub != "" is ui::leaf(v, "text", sub, ui::a("class", "caption")) end
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+end
+
+fn jobs_bar(a: state::App, v: ui::View) is
+    let mut shown: int = 0
+    let mut i: int = 0
+    while i < array_len(a.jobs) is
+        let j: jobs::Job = a.jobs[i]
+        if !j.done && shown < 3 is
+            shown += 1
+            ui::open(v, "container", "", ui::a("class", "panel") + ui::a("padxy", "24,10") + ui::a("fillw", "1"))
+            ui::open(v, "row", "", ui::a("spacing", "14") + ui::a("ay", "1") + ui::a("fillw", "1"))
+            let verb: string = if j.kind == "game" then "Gra" else (if j.kind == "install" then "Instalacja" else (if j.kind == "uninstall" then "Usuwanie" else "Klient"))
+            ui::leaf(v, "text", verb + ": " + j.title, ui::a("bold", "1"))
+            if j.percent >= 0 is
+                ui::leaf(v, "progress", "", ui::a("lo", "0") + ui::a("hi", "100") + ui::a("v", to_string(j.percent)) + ui::a("w", "px:260"))
+                ui::leaf(v, "text", to_string(j.percent) + "%", ui::a("class", "muted"))
+            end
+            if j.last_line != "" is ui::leaf(v, "text", util::clip(j.last_line, 70), ui::a("class", "caption")) end
+            ui::grow(v)
+            if j.kind == "game" is ui::leaf(v, "text", util::fmt_minutes(jobs::minutes_ran(j)), ui::a("class", "muted")) end
+            ui::btn(v, t(a, "Zatrzymaj"), "job:stop:" + j.id, "danger", "x")
+            ui::close(v)
+            ui::close(v)
+        end
+        i += 1
+    end
+end
+
+fn toast(a: state::App, v: ui::View) is
+    if a.toast == "" || now_unix() > a.toast_until is return end
+    ui::open(v, "container", "", ui::a("class", "toast card") + ui::a("padxy", "22,14") + ui::a("centerx", "1"))
+    ui::leaf(v, "text", a.toast, ui::a("bold", "1"))
+    ui::close(v)
+end
+
+;; potwierdzenie czynności destrukcyjnych
+fn confirm_modal(a: state::App, v: ui::View) is
+    if a.confirm == "" is return end
+    let kind: string = util::before(a.confirm, ":")
+    let arg: string = util::after(a.confirm, ":")
+    let mut question: string = ""
+    if kind == "uninstall" is question = "Odinstalować „" + state::find_game(a, arg).title + "”?" end
+    if kind == "unpin" is question = "Usunąć to doświadczenie z biblioteki Roblox?" end
+    if kind == "power" is question = "Na pewno: " + arg + "?" end
+    if kind == "exit" is question = "Wyjść z powłoki Hacker Mode?" end
+    ui::open(v, "modal", "", ui::a("open", "1") + ui::a("dismiss", "confirm:no"))
+    ui::open(v, "container", "", ui::a("class", "card") + ui::a("pad", "28") + ui::a("maxw", "460"))
+    ui::open(v, "column", "", ui::a("spacing", "18"))
+    ui::leaf(v, "text", question, ui::a("size", "20") + ui::a("bold", "1"))
+    ui::open(v, "row", "", ui::a("spacing", "12"))
+    ui::btn(v, t(a, "Anuluj"), "confirm:no", "ghost", "x")
+    ui::btn(v, t(a, "Tak, usuń"), "confirm:yes", "danger", "check")
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+end
+
+;; ── Biblioteka ───────────────────────────────────────────────────────────────
+
+fn matches(a: state::App, g: model::Game) -> bool is
+    if a.filter != "" && g.platform != a.filter is return false end
+    if a.query != "" && !string_contains(string_lower(g.title), string_lower(a.query)) is return false end
+    return true
+end
+
+fn detail_panel(a: state::App, v: ui::View, g: model::Game) is
+    let key: string = model::key(g)
+    let job: jobs::Job = state::job_for(a, key)
+    ui::open(v, "container", "", ui::a("class", "card") + ui::a("pad", "22") + ui::a("w", "px:360") + ui::a("fillh", "1"))
+    ui::open(v, "scroll", "", ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "14") + ui::a("fillw", "1"))
+    ui::open(v, "row", "", ui::a("fillw", "1"))
+    ui::leaf(v, "badge", model::label(g.platform), ui::a("fg", model::accent(g.platform)))
+    ui::grow(v)
+    ui::btn(v, "", "sel:", "ghost icon", "x")
+    ui::close(v)
+    if g.cover != "" is
+        ui::leaf(v, "image", g.cover, ui::a("wh", "300,420") + ui::a("fit", "1") + ui::a("radius", "16") + ui::a("clip", "1"))
+    end
+    ui::leaf(v, "text", g.title, ui::a("size", "24") + ui::a("bold", "1"))
+    ui::leaf(v, "text", if g.installed then t(a, "Zainstalowana") else t(a, "Nie zainstalowana"), ui::a("class", if g.installed then "success" else "muted"))
+    if g.playtime >= 0 is
+        ui::leaf(v, "text", t(a, "Czas gry") + ": " + util::fmt_minutes(g.playtime), ui::a("class", "muted"))
+    end
+    if g.path != "" is ui::leaf(v, "text", util::clip(g.path, 44), ui::a("class", "caption")) end
+    if job.id != "" is
+        if job.percent >= 0 is
+            ui::leaf(v, "progress", "", ui::a("lo", "0") + ui::a("hi", "100") + ui::a("v", to_string(job.percent)) + ui::a("fillw", "1"))
+        end
+        ui::btn(v, t(a, "Zatrzymaj"), "job:stop:" + job.id, "danger", "x")
+    else is
+        if g.installed is
+            ui::btn(v, t(a, "Graj"), "play:" + key, "primary", "play")
+        else is
+            ui::btn(v, t(a, "Zainstaluj"), "install:" + key, "primary", "download")
+        end
+        if g.installed && g.platform != "lutris" is
+            ui::btn(v, if g.platform == "roblox" then t(a, "Usuń z biblioteki") else t(a, "Odinstaluj"), "uninstall:" + key, "ghost", "trash")
+        end
+        if settings::save_path_of(a.s, key) != "" is
+            ui::btn(v, t(a, "Kopia zapisów"), "backup:" + key, "ghost", "upload")
+            ui::btn(v, t(a, "Przywróć zapisy"), "restore:" + key, "ghost", "download")
+        end
+    end
+    let tags: [string] = settings::tags_of(a.s, key)
+    if array_len(tags) > 0 is
+        ui::leaf(v, "text", "# " + util::join(tags, "  # "), ui::a("class", "caption"))
+    end
+    let sess: [string] = playtime::recent_sessions(key, 3)
+    if array_len(sess) > 0 is
+        ui::leaf(v, "text", t(a, "Ostatnio grane"), ui::a("class", "muted"))
+        let mut i: int = 0
+        while i < array_len(sess) is
+            let p: [string] = string_split(sess[i], "|")
+            ui::leaf(v, "text", util::fmt_date(str_to_int(p[0])) + "  ·  " + util::fmt_minutes(str_to_int(p[1])), ui::a("class", "caption"))
+            i += 1
+        end
+    end
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+end
+
+fn library(a: state::App, v: ui::View) is
+    ui::open(v, "row", "", ui::a("fillw", "1") + ui::a("fillh", "1") + ui::a("spacing", "0"))
+    ui::open(v, "container", "", ui::a("pad", "24") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "16") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+
+    ;; filtry platform + wyszukiwarka
+    ui::open(v, "row", "", ui::a("spacing", "8") + ui::a("ay", "1") + ui::a("fillw", "1"))
+    ui::chip(v, t(a, "Wszystkie"), "filter:", a.filter == "")
+    let plats: [string] = model::all_platforms()
+    let mut p: int = 0
+    while p < array_len(plats) is
+        if settings::platform_enabled(a.s, plats[p]) && stores::is_available(a.s, plats[p]) is
+            ui::chip(v, model::label(plats[p]), "filter:" + plats[p], a.filter == plats[p])
+        end
+        p += 1
+    end
+    ui::close(v)
+    ui::leaf(v, "text_input", t(a, "Szukaj gier…"), ui::a("val", a.query) + ui::a("input", "search") + ui::a("id", "search") + ui::a("fillw", "1"))
+
+    if a.busy != "" is
+        ui::leaf(v, "text", a.busy, ui::a("class", "muted") + ui::a("size", "18"))
+    elsif !a.loaded is
+        ui::leaf(v, "text", t(a, "Wczytuję bibliotekę…"), ui::a("class", "muted") + ui::a("size", "18"))
+    else is
+        ;; policz dopasowania
+        let mut hits: [model::Game] = []
+        let mut i: int = 0
+        while i < array_len(a.games) is
+            if matches(a, a.games[i]) is hits = array_push(hits, a.games[i]) end
+            i += 1
+        end
+        if array_len(hits) == 0 is
+            ui::leaf(v, "text", t(a, "Brak gier"), ui::a("class", "muted") + ui::a("size", "18"))
+        end
+        let limit: int = (a.page + 1) * 40
+        let shown: int = if array_len(hits) < limit then array_len(hits) else limit
+        let per_row: int = if a.selected != "" then 4 else 6
+        ui::open(v, "scroll", "", ui::a("fillw", "1") + ui::a("fillh", "1"))
+        ui::open(v, "column", "", ui::a("spacing", "18") + ui::a("fillw", "1"))
+        let mut r: int = 0
+        while r * per_row < shown is
+            ui::open(v, "row", "", ui::a("spacing", "18"))
+            let mut c: int = 0
+            while c < per_row && r * per_row + c < shown is
+                let g: model::Game = hits[r * per_row + c]
+                let sub: string = if g.playtime > 0 then util::fmt_minutes(g.playtime) else model::label(g.platform)
+                tile(v, "sel:" + model::key(g), g.cover, g.title, sub, 170, 240, g.platform, !g.installed)
+                c += 1
+            end
+            ui::close(v)
+            r += 1
+        end
+        if shown < array_len(hits) is ui::btn(v, t(a, "Pokaż więcej"), "more", "ghost", "chevron-down") end
+        ui::close(v)
+        ui::close(v)
+    end
+    ui::close(v)
+    ui::close(v)
+    if a.selected != "" is
+        let g2: model::Game = state::find_game(a, a.selected)
+        if g2.id != "" is detail_panel(a, v, g2) end
+    end
+    ui::close(v)
+end
+
+;; ── Roblox ───────────────────────────────────────────────────────────────────
+
+fn roblox_client_card(a: state::App, v: ui::View) is
+    let installed: bool = roblox::sober_installed()
+    ui::open(v, "container", "", ui::a("class", "card") + ui::a("pad", "20") + ui::a("w", "px:340"))
+    ui::open(v, "column", "", ui::a("spacing", "10"))
+    ui::leaf(v, "text", t(a, "Klient Roblox (Sober)"), ui::a("size", "18") + ui::a("bold", "1"))
+    if installed is
+        ui::leaf(v, "text", if roblox::running() then "● działa" else "● zainstalowany", ui::a("class", "success"))
+        ui::leaf(v, "toggler", "GameMode", ui::a("on", if roblox::sober_flag("enable_gamemode", false) then "1" else "0") + ui::a("toggle", "rb:flag:enable_gamemode"))
+        ui::leaf(v, "toggler", "OpenGL (zamiast Vulkan)", ui::a("on", if roblox::sober_flag("use_opengl", false) then "1" else "0") + ui::a("toggle", "rb:flag:use_opengl"))
+    else is
+        ui::leaf(v, "text", "Sober nie jest zainstalowany. Roblox nie ma oficjalnego klienta na Linuksa — Hacker Mode korzysta z nieoficjalnego Sobera (flatpak).", ui::a("class", "caption") + ui::a("fillw", "1"))
+        ui::btn(v, t(a, "Zainstaluj Sober"), "rb:install", "primary", "download")
+    end
+    ui::close(v)
+    ui::close(v)
+end
+
+fn roblox_add_card(a: state::App, v: ui::View) is
+    ui::open(v, "container", "", ui::a("class", "card") + ui::a("pad", "20") + ui::a("w", "px:340"))
+    ui::open(v, "column", "", ui::a("spacing", "10"))
+    ui::leaf(v, "text", t(a, "Dodaj po linku lub numerze miejsca"), ui::a("bold", "1"))
+    ui::leaf(v, "text_input", "roblox.com/games/…", ui::a("val", a.rb_link) + ui::a("input", "rb:link") + ui::a("submit", "rb:add") + ui::a("id", "rb-link"))
+    ui::btn(v, t(a, "Dodaj"), "rb:add", "ghost", "plus")
+    ui::gap(v, 4)
+    ui::leaf(v, "text", t(a, "Import ulubionych (nazwa użytkownika)"), ui::a("bold", "1"))
+    ui::leaf(v, "text_input", "username", ui::a("val", a.rb_user) + ui::a("input", "rb:user") + ui::a("submit", "rb:import") + ui::a("id", "rb-user"))
+    ui::btn(v, t(a, "Importuj"), "rb:import", "ghost", "download")
+    ui::close(v)
+    ui::close(v)
+end
+
+fn roblox_detail(a: state::App, v: ui::View) is
+    let d: roblox::Info = a.rb_info
+    let pinned: bool = roblox::is_pinned(d.place)
+    let job: jobs::Job = state::job_for(a, model::key_of("roblox", d.place))
+    ui::open(v, "container", "", ui::a("class", "card") + ui::a("pad", "22") + ui::a("w", "px:360") + ui::a("fillh", "1"))
+    ui::open(v, "scroll", "", ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "12") + ui::a("fillw", "1"))
+    ui::open(v, "row", "", ui::a("fillw", "1"))
+    ui::leaf(v, "badge", "Roblox", ui::a("fg", model::accent("roblox")))
+    ui::grow(v)
+    ui::btn(v, "", "rb:sel:", "ghost icon", "x")
+    ui::close(v)
+    if d.icon != "" is ui::leaf(v, "image", d.icon, ui::a("wh", "300,300") + ui::a("fit", "1") + ui::a("radius", "16") + ui::a("clip", "1")) end
+    ui::leaf(v, "text", d.name, ui::a("size", "24") + ui::a("bold", "1"))
+    if d.creator != "" is ui::leaf(v, "text", t(a, "Twórca") + ": " + d.creator, ui::a("class", "muted")) end
+    ui::leaf(v, "text", t(a, "Graczy teraz") + ": " + to_string(d.playing) + "   " + t(a, "Odwiedziny") + ": " + to_string(d.visits), ui::a("class", "muted"))
+    if d.likes >= 0 is ui::leaf(v, "text", t(a, "Polubienia") + ": " + to_string(d.likes) + "%", ui::a("class", "muted")) end
+    if d.desc != "" is ui::leaf(v, "text", util::clip(d.desc, 360), ui::a("class", "caption") + ui::a("fillw", "1")) end
+    if job.id != "" is
+        ui::btn(v, t(a, "Zatrzymaj"), "job:stop:" + job.id, "danger", "x")
+    else is
+        ui::btn(v, t(a, "Graj"), "rb:play:" + d.place, "primary", "play")
+    end
+    if pinned is
+        ui::btn(v, t(a, "Usuń z biblioteki"), "rb:unpin:" + d.place, "ghost", "trash")
+    else is
+        ui::btn(v, t(a, "Dodaj do biblioteki"), "rb:pin:" + d.place, "ghost", "plus")
+    end
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+end
+
+fn roblox_tab(a: state::App, v: ui::View) is
+    ui::open(v, "row", "", ui::a("fillw", "1") + ui::a("fillh", "1") + ui::a("spacing", "0"))
+    ;; lewa kolumna
+    ui::open(v, "container", "", ui::a("pad", "24"))
+    ui::open(v, "scroll", "", ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "16"))
+    roblox_client_card(a, v)
+    roblox_add_card(a, v)
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+    ;; środek
+    ui::open(v, "container", "", ui::a("padxy", "8,24") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "16") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "row", "", ui::a("spacing", "10") + ui::a("ay", "1") + ui::a("fillw", "1"))
+    ui::chip(v, t(a, "Moje doświadczenia"), "rb:mode:mine", a.rb_mode == "mine")
+    ui::chip(v, t(a, "Szukaj w Roblox"), "rb:mode:search", a.rb_mode == "search")
+    ui::close(v)
+    if a.rb_mode == "search" is
+        ui::open(v, "row", "", ui::a("spacing", "10") + ui::a("fillw", "1"))
+        ui::leaf(v, "text_input", "obby, tycoon, horror…", ui::a("val", a.rb_query) + ui::a("input", "rb:q") + ui::a("submit", "rb:search") + ui::a("id", "rb-q") + ui::a("fillw", "1"))
+        ui::btn(v, t(a, "Szukaj"), "rb:search", "primary", "search")
+        ui::close(v)
+        ui::open(v, "row", "", ui::a("spacing", "8"))
+        ui::chip(v, "obby", "rb:chip:obby", false)
+        ui::chip(v, "tycoon", "rb:chip:tycoon", false)
+        ui::chip(v, "simulator", "rb:chip:simulator", false)
+        ui::chip(v, "horror", "rb:chip:horror", false)
+        ui::chip(v, "roleplay", "rb:chip:roleplay", false)
+        ui::close(v)
+    end
+    if a.busy != "" is ui::leaf(v, "text", a.busy, ui::a("class", "muted") + ui::a("size", "18")) end
+    ui::open(v, "scroll", "", ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "18"))
+    let per_row: int = if a.rb_sel != "" then 3 else 5
+    if a.rb_mode == "mine" is
+        let mine: [model::Game] = roblox_games(a)
+        if array_len(mine) == 0 && a.busy == "" is ui::leaf(v, "text", t(a, "Brak gier"), ui::a("class", "muted")) end
+        let mut r: int = 0
+        while r * per_row < array_len(mine) is
+            ui::open(v, "row", "", ui::a("spacing", "18"))
+            let mut c: int = 0
+            while c < per_row && r * per_row + c < array_len(mine) is
+                let g: model::Game = mine[r * per_row + c]
+                tile(v, "rb:sel:" + g.id, g.cover, g.title, "", 180, 180, "roblox", false)
+                c += 1
+            end
+            ui::close(v)
+            r += 1
+        end
+    else is
+        let mut r2: int = 0
+        while r2 * per_row < array_len(a.rb_results) is
+            ui::open(v, "row", "", ui::a("spacing", "18"))
+            let mut c2: int = 0
+            while c2 < per_row && r2 * per_row + c2 < array_len(a.rb_results) is
+                let d: roblox::Info = a.rb_results[r2 * per_row + c2]
+                tile(v, "rb:sel:" + d.place, d.icon, d.name, to_string(d.playing) + " online", 180, 180, "roblox", false)
+                c2 += 1
+            end
+            ui::close(v)
+            r2 += 1
+        end
+    end
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+    if a.rb_sel != "" is roblox_detail(a, v) end
+    ui::close(v)
+end
+
+fn roblox_games(a: state::App) -> [model::Game] is
+    let mut out: [model::Game] = []
+    let mut i: int = 0
+    while i < array_len(a.games) is
+        if a.games[i].platform == "roblox" is out = array_push(out, a.games[i]) end
+        i += 1
+    end
+    return out
+end
+
+;; ── Ustawienia ───────────────────────────────────────────────────────────────
+
+fn section(v: ui::View, title: string) is
+    ui::open(v, "container", "", ui::a("class", "card") + ui::a("pad", "22") + ui::a("maxw", "760") + ui::a("fillw", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "12") + ui::a("fillw", "1"))
+    ui::leaf(v, "text", title, ui::a("size", "18") + ui::a("bold", "1"))
+end
+
+fn section_end(v: ui::View) is
+    ui::close(v)
+    ui::close(v)
+end
+
+fn settings_tab(a: state::App, v: ui::View) is
+    ui::open(v, "container", "", ui::a("pad", "24") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "scroll", "", ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "18") + ui::a("fillw", "1"))
+
+    section(v, t(a, "Język"))
+    ui::open(v, "row", "", ui::a("spacing", "8"))
+    ui::chip(v, "Polski", "set:lang:pl", a.lang == "pl")
+    ui::chip(v, "English", "set:lang:en", a.lang == "en")
+    ui::close(v)
+    section_end(v)
+
+    section(v, t(a, "Motyw"))
+    ui::open(v, "row", "", ui::a("spacing", "8"))
+    let themes: [string] = ["dark", "light", "nord", "dracula", "tokyo", "glass"]
+    let mut i: int = 0
+    while i < array_len(themes) is
+        ui::chip(v, themes[i], "set:theme:" + themes[i], settings::theme(a.s) == themes[i])
+        i += 1
+    end
+    ui::close(v)
+    section_end(v)
+
+    section(v, t(a, "Narzędzia gamingowe"))
+    ui::leaf(v, "toggler", t(a, "Tryb wrapper (ukryj powłokę podczas gry)"), ui::a("on", if settings::wrapper_mode(a.s) then "1" else "0") + ui::a("toggle", "set:wrapper"))
+    ui::leaf(v, "toggler", "MangoHud", ui::a("on", if settings::get_bool(a.s, "gaming_tools.mangohud", true) then "1" else "0") + ui::a("toggle", "set:tool:mangohud"))
+    ui::leaf(v, "toggler", "gamescope", ui::a("on", if settings::get_bool(a.s, "gaming_tools.gamescope", false) then "1" else "0") + ui::a("toggle", "set:tool:gamescope"))
+    ui::leaf(v, "toggler", "vkBasalt", ui::a("on", if settings::get_bool(a.s, "gaming_tools.vkbasalt", false) then "1" else "0") + ui::a("toggle", "set:tool:vkbasalt"))
+    section_end(v)
+
+    section(v, t(a, "Platformy"))
+    let plats: [string] = model::all_platforms()
+    let mut p: int = 0
+    while p < array_len(plats) is
+        let ok: bool = stores::is_available(a.s, plats[p])
+        ui::leaf(v, "toggler", model::label(plats[p]) + (if ok then "" else "  (niedostępna)"), ui::a("on", if settings::platform_enabled(a.s, plats[p]) then "1" else "0") + ui::a("toggle", "set:plat:" + plats[p]))
+        if stores::supports_login(plats[p]) && ok && !stores::is_logged_in(a.s, plats[p]) is
+            ui::btn(v, t(a, "Zaloguj") + " — " + model::label(plats[p]), "login:" + plats[p], "ghost", "lock-open")
+        end
+        p += 1
+    end
+    section_end(v)
+
+    section(v, "Steam / SteamGridDB")
+    ui::leaf(v, "text", t(a, "Klucz Steam API"), ui::a("class", "muted"))
+    ui::leaf(v, "text_input", "XXXXXXXX…", ui::a("val", a.input_steam) + ui::a("input", "in:steamkey") + ui::a("secret", "1"))
+    ui::leaf(v, "text", t(a, "SteamID64"), ui::a("class", "muted"))
+    ui::leaf(v, "text_input", "7656119…", ui::a("val", a.input_steamid) + ui::a("input", "in:steamid"))
+    ui::leaf(v, "text", t(a, "Klucz SteamGridDB"), ui::a("class", "muted"))
+    ui::leaf(v, "text_input", "…", ui::a("val", a.input_sgdb) + ui::a("input", "in:sgdb") + ui::a("secret", "1"))
+    ui::btn(v, t(a, "Zapisz"), "set:keys", "primary", "check")
+    section_end(v)
+
+    section(v, t(a, "Dźwięk i jasność"))
+    ui::open(v, "row", "", ui::a("spacing", "8"))
+    ui::btn(v, "Vol −", "sys:vol-", "ghost", "volume-x")
+    ui::btn(v, "Vol +", "sys:vol+", "ghost", "volume-2")
+    ui::btn(v, "Mute", "sys:mute", "ghost", "")
+    ui::btn(v, "Jasność −", "sys:bri-", "ghost", "sun")
+    ui::btn(v, "Jasność +", "sys:bri+", "ghost", "sun")
+    ui::btn(v, "Wi-Fi", "sys:wifi", "ghost", "wifi")
+    ui::close(v)
+    section_end(v)
+
+    section(v, t(a, "Zasilanie"))
+    ui::open(v, "row", "", ui::a("spacing", "8"))
+    ui::btn(v, "Power saver", "sys:profile:power_saving", "ghost", "battery")
+    ui::btn(v, "Balanced", "sys:profile:balanced", "ghost", "battery")
+    ui::btn(v, "Performance", "sys:profile:performance", "ghost", "cpu")
+    ui::close(v)
+    ui::open(v, "row", "", ui::a("spacing", "8"))
+    ui::btn(v, t(a, "Uśpij"), "power:sleep", "ghost", "moon")
+    ui::btn(v, t(a, "Restart"), "power:restart", "ghost", "refresh-cw")
+    ui::btn(v, t(a, "Wyłącz"), "power:shutdown", "danger", "power")
+    ui::close(v)
+    if a.dev is ui::leaf(v, "text", "Tryb dev: akcje zasilania są tylko symulowane.", ui::a("class", "caption")) end
+    section_end(v)
+
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+end
+
+;; ── Diagnostyka ──────────────────────────────────────────────────────────────
+
+fn doctor_tab(a: state::App, v: ui::View) is
+    ui::open(v, "container", "", ui::a("pad", "24") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "14") + ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::btn(v, t(a, "Uruchom diagnostykę"), "doctor:run", "primary", "refresh-cw")
+    ui::open(v, "scroll", "", ui::a("fillw", "1") + ui::a("fillh", "1"))
+    ui::open(v, "column", "", ui::a("spacing", "6") + ui::a("fillw", "1"))
+    let mut group: string = ""
+    let mut i: int = 0
+    while i < array_len(a.doctor) is
+        let p: [string] = string_split(a.doctor[i], "|")
+        if array_len(p) >= 4 is
+            if p[3] != group is
+                group = p[3]
+                ui::gap(v, 6)
+                ui::leaf(v, "text", group, ui::a("size", "18") + ui::a("bold", "1"))
+            end
+            ui::open(v, "row", "", ui::a("spacing", "10"))
+            ui::leaf(v, "icon", if p[1] == "1" then "circle-check" else "triangle-alert", ui::a("fg", if p[1] == "1" then "#9ece6a" else "#f7768e"))
+            ui::leaf(v, "text", p[0], ui::a("bold", "1"))
+            if p[1] != "1" is ui::leaf(v, "text", "→ " + p[2], ui::a("class", "caption")) end
+            ui::close(v)
+        end
+        i += 1
+    end
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+    ui::close(v)
+end
+
+;; ── korzeń ───────────────────────────────────────────────────────────────────
+
+pub fn render(a: state::App) -> string is
+    let v: ui::View = ui::view()
+    ui::open(v, "stack", "", ui::a("filla", "1"))
+    ui::open(v, "column", "", ui::a("filla", "1") + ui::a("spacing", "0"))
+    topbar(a, v)
+    ui::open(v, "container", "", ui::a("fillw", "1") + ui::a("fillh", "1"))
+    if a.tab == "library" is library(a, v) end
+    if a.tab == "roblox" is roblox_tab(a, v) end
+    if a.tab == "settings" is settings_tab(a, v) end
+    if a.tab == "doctor" is doctor_tab(a, v) end
+    ui::close(v)
+    jobs_bar(a, v)
+    ui::close(v)
+    ;; warstwa nakładek
+    ui::open(v, "container", "", ui::a("filla", "1") + ui::a("ax", "1") + ui::a("ay", "2") + ui::a("pad", "30"))
+    toast(a, v)
+    ui::close(v)
+    confirm_modal(a, v)
+    ui::close(v)
+    return v.out
+end
