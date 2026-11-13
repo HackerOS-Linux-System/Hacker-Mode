@@ -1,39 +1,23 @@
-[workspace]
-resolver = "2"
-members = [
-    "ipc",
-    "launchers-cli/ea-cli",
-    "launchers-cli/bnet",
-    "source-code/backend/src-tauri",
-]
-# Hacker Mode nie ma już własnego kompozytora (dawne `compositor/`,
-# usunięte w v0.3) - sesję Wayland zapewnia teraz `comphwde` (projekt
-# HWDE), uruchamiany jako `comphwde --extern-hacker-mode` - patrz
-# `scripts/hacker-mode-session` i README. `ipc/` to WŁASNA, samodzielna
-# implementacja klienta protokołu comphwde (patrz jej moduł docs) -
-# budowanie tego workspace'u NIE wymaga checkoutu ani kompilacji
-# repozytorium HWDE; tylko obecności binarki `comphwde` w PATH w
-# czasie działania sesji.
-#
-# `launchers-cli/` to dwie biblioteki (ea-cli, bnet) statycznie linkowane
-# do binarki `hacker-mode` — odpowiadają za wykrywanie i uruchamianie EA
-# app / Battle.net zainstalowanych pod Wine. W przeciwieństwie do
-# Epic/GOG/Amazon (obsługiwanych przez zewnętrzne binarki `legendary`/
-# `gogdl`/`nile` wywoływane przez `Command`) tu logika jest częścią samej
-# binarki hacker-mode — patrz moduł-dokumentacja w
-# `launchers-cli/ea-cli/src/lib.rs` i `launchers-cli/bnet/src/lib.rs` po
-# wyjaśnienie zakresu (i świadomych ograniczeń) tej integracji.
+[package]
+-> name        => hacker-mode
+-> version     => 1.0.0
+-> description => Powłoka konsoli do gier: Roblox, Steam, Epic, GOG, Amazon, Lutris, EA app i Battle.net
+-> authors     => ["HackerOS Team <hackeros068@gmail.com>"]
+-> license     => GPL-3.0
+-> lang        => h#
 
-[workspace.package]
-version = "1.0.0"
-edition = "2021"
-authors = ["HackerOS Team <hackeros068@gmail.com>"]
-license = "GPL-3.0"
-repository = "https://github.com/HackerOS-Linux-System/Hacker-Mode"
+[edition]
+-> edition => 2026
 
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "unwind"
-strip = true
+[layout]
+-> src => src
+
+[build]
+-> link => static
+
+[default-build]
+-> profile => release
+
+[dependencies]
+-> gui     => newest
+-> webview => newest
