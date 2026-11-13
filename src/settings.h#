@@ -1,0 +1,164 @@
+mod util
+mod jsonlite
+
+pub struct Settings is
+    pub doc: string
+end
+
+pub fn config_path() -> string is
+    return util::config_dir() + "/Hacker-Mode/config.json"
+end
+
+fn legacy_path() -> string is
+    return util::config_dir() + "/hacker-mode/config.json"
+end
+
+fn default_language() -> string is
+    let l: string = env_get("LANG")
+    if string_starts_with(l, "pl") is return "pl" end
+    return "en"
+end
+
+fn valid_doc(s: string) -> bool is
+    let t: string = string_trim(s)
+    return string_len(t) >= 2 && string_at(t, 0) == "{" && string_ends_with(t, "}")
+end
+
+pub fn save(s: Settings) is
+    let dir: string = util::dirname(config_path())
+    util::mkdirp(dir)
+    util::rc("chmod 700 " + util::sq(dir))
+    util::write_atomic(config_path(), jsonlite::pretty(s.doc, 0) + "\n", "600")
+end
+
+pub fn load() -> Settings is
+    let p: string = config_path()
+    let mut raw: string = util::read(p)
+    if raw == "" && util::exists(legacy_path()) is
+        let old: string = util::read(legacy_path())
+        if valid_doc(old) is
+            let migrated: Settings = Settings { doc: string_trim(old) }
+            save(migrated)
+            return migrated
+        end
+    end
+    if raw != "" && !valid_doc(raw) is
+        ;; uszkodzony plik: zachowaj kopię i zacznij od domyślnych
+        util::rc("mv " + util::sq(p) + " " + util::sq(p + ".corrupt-" + to_string(now_unix())))
+        raw = ""
+    end
+    if raw == "" is return Settings { doc: "{}" } end
+    return Settings { doc: string_trim(raw) }
+end
+
+;; ── odczyt z wartościami domyślnymi ──────────────────────────────────────────
+
+pub fn get_str(s: Settings, path: string, dflt: string) -> string is
+    let raw: string = jsonlite::path(s.doc, path)
+    if raw == "" || raw == "null" is return dflt end
+    return jsonlite::unq(raw)
+end
+
+pub fn get_bool(s: Settings, path: string, dflt: bool) -> bool is
+    let raw: string = jsonlite::path(s.doc, path)
+    if raw == "" || raw == "null" is return dflt end
+    return jsonlite::to_bool(raw)
+end
+
+pub fn get_int(s: Settings, path: string, dflt: int) -> int is
+    let raw: string = jsonlite::path(s.doc, path)
+    if raw == "" || raw == "null" is return dflt end
+    return jsonlite::to_int(raw)
+end
+
+pub fn get_list(s: Settings, path: string) -> [string] is
+    return jsonlite::str_list(jsonlite::path(s.doc, path))
+end
+
+;; ── zapis ────────────────────────────────────────────────────────────────────
+
+pub fn set_str(s: Settings, path: string, v: string) is
+    if v == "" is
+        s.doc = jsonlite::pset(s.doc, path, "null")
+    else is
+        s.doc = jsonlite::pset(s.doc, path, jsonlite::quote(v))
+    end
+    save(s)
+end
+
+pub fn set_bool(s: Settings, path: string, v: bool) is
+    s.doc = jsonlite::pset(s.doc, path, if v then "true" else "false")
+    save(s)
+end
+
+pub fn set_int(s: Settings, path: string, v: int) is
+    s.doc = jsonlite::pset(s.doc, path, to_string(v))
+    save(s)
+end
+
+pub fn set_list(s: Settings, path: string, v: [string]) is
+    s.doc = jsonlite::pset(s.doc, path, jsonlite::str_array(v))
+    save(s)
+end
+
+;; ── wygodne akcesory ─────────────────────────────────────────────────────────
+
+pub fn language(s: Settings) -> string is
+    return get_str(s, "language", default_language())
+end
+
+pub fn theme(s: Settings) -> string is
+    return get_str(s, "theme", "dark")
+end
+
+pub fn compositor(s: Settings) -> string is
+    return get_str(s, "compositor", "labwc")
+end
+
+pub fn wrapper_mode(s: Settings) -> bool is
+    return get_bool(s, "wrapper_mode_enabled", true)
+end
+
+pub fn enabled_platforms(s: Settings) -> [string] is
+    let l: [string] = get_list(s, "enabled_platforms")
+    if array_len(l) == 0 is
+        return ["steam", "epic", "gog", "amazon", "lutris", "ea", "battlenet", "roblox"]
+    end
+    return l
+end
+
+pub fn platform_enabled(s: Settings, slug: string) -> bool is
+    ;; stare configi nie znają Robloxa — traktujemy go jako włączony, dopóki użytkownik go nie wyłączy
+    let raw: string = jsonlite::get(s.doc, "enabled_platforms")
+    if raw == "" is return true end
+    if slug == "roblox" && !util::has(get_list(s, "enabled_platforms"), "roblox") && get_bool(s, "roblox_opt_out", false) is return false end
+    if slug == "roblox" is return true end
+    return util::has(get_list(s, "enabled_platforms"), slug)
+end
+
+pub fn set_platform_enabled(s: Settings, slug: string, on: bool) is
+    if slug == "roblox" is
+        set_bool(s, "roblox_opt_out", !on)
+        return
+    end
+    let mut cur: [string] = enabled_platforms(s)
+    if on && !util::has(cur, slug) is cur = array_push(cur, slug) end
+    if !on is cur = util::without(cur, slug) end
+    set_list(s, "enabled_platforms", cur)
+end
+
+pub fn tags_of(s: Settings, game_key: string) -> [string] is
+    return jsonlite::str_list(jsonlite::get(jsonlite::get(s.doc, "game_tags"), game_key))
+end
+
+pub fn cover_override(s: Settings, game_key: string) -> string is
+    return jsonlite::gstr(jsonlite::get(s.doc, "cover_overrides"), game_key)
+end
+
+pub fn ctrl_config(s: Settings, game_key: string) -> string is
+    return jsonlite::gstr(jsonlite::get(s.doc, "game_controller_configs"), game_key)
+end
+
+pub fn save_path_of(s: Settings, game_key: string) -> string is
+    return jsonlite::gstr(jsonlite::get(s.doc, "game_save_paths"), game_key)
+end
