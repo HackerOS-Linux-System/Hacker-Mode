@@ -1,0 +1,64 @@
+mod util
+mod roblox
+
+;; Wpis: "nazwa|1/0|podpowiedź|grupa"
+fn entry(name: string, ok: bool, hint: string, group: string) -> string is
+    return name + "|" + (if ok then "1" else "0") + "|" + hint + "|" + group
+end
+
+fn tool(name: string, hint: string, group: string) -> string is
+    return entry(name, util::have(name), hint, group)
+end
+
+pub fn run() -> [string] is
+    let mut r: [string] = []
+    r = array_push(r, tool("steam", "Zainstaluj Steam lub flatpak com.valvesoftware.Steam", "Sklepy"))
+    r = array_push(r, tool("legendary", "pip install legendary-gl  (Epic Games)", "Sklepy"))
+    r = array_push(r, tool("gogdl", "Zainstaluj gogdl (Heroic) — biblioteka GOG", "Sklepy"))
+    r = array_push(r, tool("nile", "pip install nile  (Amazon Games)", "Sklepy"))
+    r = array_push(r, tool("lutris", "Zainstaluj Lutris", "Sklepy"))
+    r = array_push(r, tool("wine", "Wine dla EA app i Battle.net", "Sklepy"))
+    r = array_push(r, tool("sqlite3", "Potrzebne do czasu gry z Lutris", "Sklepy"))
+    r = array_push(r, tool("curl", "Wymagane: API sklepów, okładki, Roblox", "System"))
+    r = array_push(r, tool("gamescope", "Opcjonalnie: gamescope jako warstwa okna gry", "Narzędzia"))
+    r = array_push(r, tool("mangohud", "Opcjonalnie: nakładka MangoHud", "Narzędzia"))
+    r = array_push(r, tool("nmcli", "NetworkManager: Wi-Fi", "System"))
+    r = array_push(r, tool("bluetoothctl", "BlueZ: Bluetooth", "System"))
+    r = array_push(r, entry("wpctl / pactl", util::have("wpctl") || util::have("pactl"), "PipeWire (wpctl) lub PulseAudio (pactl)", "System"))
+    r = array_push(r, tool("brightnessctl", "Regulacja jasności", "System"))
+    r = array_push(r, tool("powerprofilesctl", "power-profiles-daemon", "System"))
+    r = array_push(r, entry("labwc / comphwde", util::have("labwc") || util::exists(util::sh("echo ${XDG_RUNTIME_DIR:-/tmp}") + "/sde"), "Kompozytor sesji konsoli", "System"))
+    let rb: [string] = roblox::doctor()
+    let mut i: int = 0
+    while i < array_len(rb) is
+        r = array_push(r, rb[i] + "|Roblox")
+        i += 1
+    end
+    return r
+end
+
+pub fn field(e: string, n: int) -> string is
+    let p: [string] = string_split(e, "|")
+    if n < array_len(p) is return p[n] end
+    return ""
+end
+
+pub fn report() -> string is
+    let rows: [string] = run()
+    let mut out: string = ""
+    let mut group: string = ""
+    let mut i: int = 0
+    while i < array_len(rows) is
+        let g: string = field(rows[i], 3)
+        if g != group is
+            group = g
+            out = out + "\n[" + g + "]\n"
+        end
+        let mark: string = if field(rows[i], 1) == "1" then "  ✓ " else "  ✗ "
+        out = out + mark + field(rows[i], 0)
+        if field(rows[i], 1) != "1" is out = out + "   → " + field(rows[i], 2) end
+        out = out + "\n"
+        i += 1
+    end
+    return out
+end
