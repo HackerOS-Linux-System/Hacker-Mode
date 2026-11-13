@@ -1,0 +1,160 @@
+mod util
+
+pub struct Action is
+    pub ok:  bool
+    pub msg: string
+end
+
+pub fn ok() -> Action is
+    return Action { ok: true, msg: "" }
+end
+
+fn act(ok: bool, msg: string) -> Action is
+    return Action { ok: ok, msg: msg }
+end
+
+fn run(cmd: string) -> Action is
+    let out: string = string_trim(shell("( " + cmd + " ) 2>&1; echo \"::$?\""))
+    let code: string = util::rafter(out, "::")
+    let body: string = string_trim(util::before(out, "\n::" + code))
+    if code == "0" is return act(true, body) end
+    return act(false, body)
+end
+
+fn missing(tool: string) -> Action is
+    return act(false, "Brak polecenia `" + tool + "` w systemie.")
+end
+
+pub fn audio_up() -> Action is
+    if util::have("wpctl") is return run("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+") end
+    if util::have("pactl") is return run("pactl set-sink-volume @DEFAULT_SINK@ +5%") end
+    return missing("wpctl / pactl")
+end
+
+pub fn audio_down() -> Action is
+    if util::have("wpctl") is return run("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-") end
+    if util::have("pactl") is return run("pactl set-sink-volume @DEFAULT_SINK@ -5%") end
+    return missing("wpctl / pactl")
+end
+
+pub fn audio_mute() -> Action is
+    if util::have("wpctl") is return run("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle") end
+    if util::have("pactl") is return run("pactl set-sink-mute @DEFAULT_SINK@ toggle") end
+    return missing("wpctl / pactl")
+end
+
+;; głośność 0..100 albo -1
+pub fn audio_level() -> int is
+    if util::have("wpctl") is
+        let v: string = util::sh("wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null")
+        let num: string = util::before(util::after(v, "Volume: "), " ")
+        if num == "" is return -1 end
+        let whole: int = str_to_int(util::before(num, ".")) * 100
+        let frac: string = util::after(num, ".")
+        let part: int = if frac == "" then 0 else str_to_int(string_slice(util::pad_left(frac, 2, "0"), 0, 2))
+        return whole + part
+    end
+    return -1
+end
+
+pub fn brightness_up() -> Action is
+    if !util::have("brightnessctl") is return missing("brightnessctl") end
+    return run("brightnessctl set +5%")
+end
+
+pub fn brightness_down() -> Action is
+    if !util::have("brightnessctl") is return missing("brightnessctl") end
+    return run("brightnessctl set 5%-")
+end
+
+pub fn wifi_toggle() -> Action is
+    if !util::have("nmcli") is return missing("nmcli") end
+    let st: string = util::sh("nmcli radio wifi")
+    return run("nmcli radio wifi " + (if st == "enabled" then "off" else "on"))
+end
+
+;; "SSID|sygnał|zabezpieczenia"
+pub fn wifi_list() -> [string] is
+    if !util::have("nmcli") is return [] end
+    let out: string = shell("nmcli -t -f SSID,SIGNAL,SECURITY dev wifi list 2>/dev/null")
+    let ls: [string] = util::lines(out)
+    let mut res: [string] = []
+    let mut i: int = 0
+    while i < array_len(ls) is
+        let p: [string] = string_split(ls[i], ":")
+        if array_len(p) >= 3 && p[0] != "" && !util::has(res, p[0] + "|" + p[1] + "|" + p[2]) is
+            res = array_push(res, p[0] + "|" + p[1] + "|" + p[2])
+        end
+        i += 1
+    end
+    return res
+end
+
+;; SSID: bez znaków sterujących, ≤ 32 bajty; hasło WPA 8..63 znaków
+pub fn valid_ssid(ssid: string) -> bool is
+    return string_len(ssid) > 0 && string_len(ssid) <= 32 && !string_contains(ssid, "\n")
+end
+
+pub fn valid_password(p: string) -> bool is
+    return string_len(p) >= 8 && string_len(p) <= 63 && !string_contains(p, "\n")
+end
+
+pub fn valid_mac(mac: string) -> bool is
+    let parts: [string] = string_split(mac, ":")
+    if array_len(parts) != 6 is return false end
+    let mut i: int = 0
+    while i < array_len(parts) is
+        if string_len(parts[i]) != 2 is return false end
+        i += 1
+    end
+    return string_len(mac) == 17
+end
+
+;; hasło przekazujemy przez plik tymczasowy 600 (nie przez argumenty procesu widoczne w `ps`)
+pub fn wifi_connect(ssid: string, password: string) -> Action is
+    if !util::have("nmcli") is return missing("nmcli") end
+    if !valid_ssid(ssid) is return act(false, "Nieprawidłowy SSID.") end
+    if password == "" is return run("nmcli dev wifi connect " + util::sq(ssid)) end
+    if !valid_password(password) is return act(false, "Hasło WPA musi mieć 8–63 znaków.") end
+    let tmp: string = util::sh("mktemp")
+    util::rc("chmod 600 " + util::sq(tmp))
+    fs_write(tmp, password + "\n")
+    let r: Action = run("nmcli --ask dev wifi connect " + util::sq(ssid) + " < " + util::sq(tmp))
+    util::rc("rm -f " + util::sq(tmp))
+    return r
+end
+
+pub fn bluetooth_scan() -> Action is
+    if !util::have("bluetoothctl") is return missing("bluetoothctl") end
+    return run("bluetoothctl --timeout 5 scan on")
+end
+
+pub fn bluetooth_pair(mac: string) -> Action is
+    if !util::have("bluetoothctl") is return missing("bluetoothctl") end
+    if !valid_mac(mac) is return act(false, "Nieprawidłowy adres MAC.") end
+    return run("bluetoothctl pair " + util::sq(mac))
+end
+
+pub fn power_profile(profile: string) -> Action is
+    if !util::have("powerprofilesctl") is return missing("powerprofilesctl") end
+    let p: string = if profile == "power_saving" then "power-saver" else (if profile == "performance" then "performance" else "balanced")
+    return run("powerprofilesctl set " + p)
+end
+
+pub fn shutdown() -> Action is return run("systemctl poweroff") end
+pub fn restart() -> Action is return run("systemctl reboot") end
+pub fn sleep() -> Action is return run("systemctl suspend") end
+
+;; bateria (0..100) albo -1
+pub fn battery() -> int is
+    let v: string = util::sh("cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -n 1")
+    if v == "" is return -1 end
+    return str_to_int(v)
+end
+
+;; powiadomienie pulpitowe (notify-send)
+pub fn notify(title: string, body: string) is
+    if util::have("notify-send") is
+        util::rc("notify-send -a 'Hacker Mode' " + util::sq(title) + " " + util::sq(body))
+    end
+end
