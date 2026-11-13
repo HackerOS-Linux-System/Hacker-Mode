@@ -1,0 +1,121 @@
+mod util
+mod model
+mod stores
+mod roblox
+
+pub struct Job is
+    pub id:        string
+    pub kind:      string    ;; game | install | uninstall | client
+    pub platform:  string
+    pub game_id:   string
+    pub title:     string
+    pub pid:       int
+    pub status:    string    ;; ścieżka pliku z kodem wyjścia
+    pub log:       string
+    pub started:   int
+    pub done:      bool
+    pub ok:        bool
+    pub percent:   int       ;; -1 = nieznany
+    pub last_line: string
+    pub watch:     string    ;; "" | steam | roblox — gra działa dłużej niż proces startowy
+    pub seen:      bool      ;; obserwator widział działającą grę
+    pub quiet:     int       ;; kolejne odpytania bez gry
+end
+
+pub fn empty() -> Job is
+    return Job { id: "", kind: "", platform: "", game_id: "", title: "", pid: -1, status: "", log: "", started: 0,
+        done: true, ok: false, percent: -1, last_line: "", watch: "", seen: false, quiet: 0 }
+end
+
+fn dir() -> string is
+    return util::cache_dir() + "/hacker-mode/jobs"
+end
+
+pub fn key(j: Job) -> string is
+    return model::key_of(j.platform, j.game_id)
+end
+
+;; Uruchamia `cmd` w tle. Zwraca zadanie (pid < 0 gdy start się nie udał).
+pub fn start(kind: string, platform: string, game_id: string, title: string, cmd: string, watch: string) -> Job is
+    util::mkdirp(dir())
+    let id: string = kind + "-" + to_string(now_ms())
+    let script: string = dir() + "/" + id + ".sh"
+    let status: string = dir() + "/" + id + ".status"
+    let log: string = dir() + "/" + id + ".log"
+    fs_write(script, "#!/bin/sh\n" + cmd + "\necho $? > " + util::sq(status) + "\n")
+    let pid: int = str_to_int(util::sh("setsid sh " + util::sq(script) + " > " + util::sq(log) + " 2>&1 < /dev/null & echo $!"))
+    return Job { id: id, kind: kind, platform: platform, game_id: game_id, title: title, pid: pid,
+        status: status, log: log, started: now_unix(), done: false, ok: false, percent: -1,
+        last_line: "", watch: watch, seen: false, quiet: 0 }
+end
+
+;; postęp w % z ostatniej linii logu ("42%" / "42.5 %")
+pub fn percent_in(line: string) -> int is
+    let at: int = string_find(line, "%")
+    if at <= 0 is return -1 end
+    let mut k: int = at - 1
+    while k >= 0 && string_at(line, k) == " " is k -= 1 end
+    let mut num: string = ""
+    while k >= 0 && (string_contains("0123456789.", string_at(line, k))) is
+        num = string_at(line, k) + num
+        k -= 1
+    end
+    if num == "" is return -1 end
+    let whole: int = str_to_int(util::before(num, "."))
+    if whole < 0 || whole > 100 is return -1 end
+    return whole
+end
+
+fn tail_line(path: string) -> string is
+    if !util::exists(path) is return "" end
+    return util::sh("tail -c 600 " + util::sq(path) + " | tr '\\r' '\\n' | grep -v '^$' | tail -n 1")
+end
+
+fn watcher_active(j: Job) -> bool is
+    if j.watch == "roblox" is return roblox::running() end
+    if j.watch == "steam" is return stores::steam_running_appid() == j.game_id end
+    return false
+end
+
+;; Odpytanie zadania (co ~700 ms). Po zakończeniu: done = true, ok = kod 0.
+pub fn poll(j: Job) is
+    if j.done is return end
+    let l: string = tail_line(j.log)
+    if l != "" is
+        j.last_line = util::clip(l, 120)
+        let p: int = percent_in(l)
+        if p >= 0 is j.percent = p end
+    end
+    let finished: bool = util::exists(j.status)
+    if !finished is return end
+    if j.watch == "" is
+        j.done = true
+        j.ok = str_to_int(util::sh("cat " + util::sq(j.status))) == 0
+        return
+    end
+    ;; proces startowy się skończył, ale gra może jeszcze działać (Steam / Sober)
+    if watcher_active(j) is
+        j.seen = true
+        j.quiet = 0
+        return
+    end
+    j.quiet += 1
+    let age: int = now_unix() - j.started
+    if (j.seen && j.quiet >= 3) || (!j.seen && age > 45 && j.quiet >= 3) is
+        j.done = true
+        j.ok = true
+    end
+end
+
+pub fn minutes_ran(j: Job) -> int is
+    return (now_unix() - j.started) / 60
+end
+
+pub fn stop(j: Job) is
+    if j.platform == "roblox" is
+        util::rc(roblox::stop_command())
+    elsif j.pid > 0 is
+        util::rc("kill -TERM -- -" + to_string(j.pid))
+        util::rc("kill -TERM " + to_string(j.pid))
+    end
+end
