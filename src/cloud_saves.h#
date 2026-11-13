@@ -1,0 +1,50 @@
+mod util
+mod settings
+
+fn safe(key: string) -> string is
+    return string_replace(string_replace(key, ":", "-"), "/", "_")
+end
+
+;; Tworzy kopię. Zwraca "" przy sukcesie albo komunikat błędu.
+pub fn backup(s: settings::Settings, game_key: string) -> string is
+    let root: string = util::expand(settings::get_str(s, "cloud_saves_backup_dir", ""))
+    let src: string = util::expand(settings::save_path_of(s, game_key))
+    if root == "" is return "Ustaw katalog kopii zapasowych w ustawieniach." end
+    if src == "" || !util::exists(src) is return "Ustaw istniejącą ścieżkę zapisów tej gry." end
+    util::mkdirp(root)
+    let dest: string = root + "/" + safe(game_key) + "-" + to_string(now_unix()) + ".tar.gz"
+    let parent: string = util::dirname(src)
+    let name: string = util::basename(src)
+    if util::rc("tar -czf " + util::sq(dest) + " -C " + util::sq(parent) + " " + util::sq(name)) != 0 is
+        return "Nie udało się utworzyć kopii (tar)."
+    end
+    return ""
+end
+
+pub fn list(s: settings::Settings, game_key: string) -> [string] is
+    let root: string = util::expand(settings::get_str(s, "cloud_saves_backup_dir", ""))
+    if root == "" is return [] end
+    let all: [string] = util::ls(root)
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(all) is
+        if string_starts_with(all[i], safe(game_key) + "-") && string_ends_with(all[i], ".tar.gz") is out = array_push(out, all[i]) end
+        i += 1
+    end
+    return sort_strings(out)
+end
+
+;; Przywraca najnowszą kopię na miejsce zapisów.
+pub fn restore_latest(s: settings::Settings, game_key: string) -> string is
+    let root: string = util::expand(settings::get_str(s, "cloud_saves_backup_dir", ""))
+    let src: string = util::expand(settings::save_path_of(s, game_key))
+    let files: [string] = list(s, game_key)
+    if array_len(files) == 0 is return "Brak kopii zapasowych tej gry." end
+    if src == "" is return "Ustaw ścieżkę zapisów tej gry." end
+    let latest: string = files[array_len(files) - 1]
+    util::mkdirp(util::dirname(src))
+    if util::rc("tar -xzf " + util::sq(root + "/" + latest) + " -C " + util::sq(util::dirname(src))) != 0 is
+        return "Nie udało się przywrócić kopii."
+    end
+    return ""
+end
