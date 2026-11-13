@@ -1,0 +1,50 @@
+mod util
+mod jsonlite
+
+pub fn dir() -> string is
+    return util::cache_dir() + "/hacker-mode/covers"
+end
+
+fn ext_of(url: string) -> string is
+    let clean: string = util::before(url, "?")
+    let e: string = string_lower(util::rafter(clean, "."))
+    if string_len(e) <= 4 && string_len(e) > 0 && !string_contains(e, "/") is return e end
+    return "jpg"
+end
+
+;; Zwraca lokalną ścieżkę okładki (pobiera, jeśli trzeba); "" przy niepowodzeniu.
+pub fn cache_image(url: string, cache_key: string) -> string is
+    if url == "" is return "" end
+    let safe: string = string_replace(string_replace(cache_key, "/", "_"), ":", "-")
+    let path: string = dir() + "/" + safe + "." + ext_of(url)
+    if util::exists(path) is return path end
+    let full: string = if string_starts_with(url, "//") then "https:" + url else url
+    if util::download(full, path, 12) is return path end
+    return ""
+end
+
+pub fn local_or_cached(src: string, cache_key: string) -> string is
+    if src == "" is return "" end
+    if string_starts_with(src, "http") || string_starts_with(src, "//") is return cache_image(src, cache_key) end
+    if util::exists(src) is return src end
+    return ""
+end
+
+;; SteamGridDB: okładka 600x900 po tytule (wymaga klucza API)
+pub fn steamgriddb_cover(title: string, cache_key: string, api_key: string) -> string is
+    if api_key == "" || title == "" is return "" end
+    let auth: string = "Authorization: Bearer " + api_key
+    let s: string = shell("curl -fsSL --max-time 10 -H " + util::sq(auth) + " " + util::sq("https://www.steamgriddb.com/api/v2/search/autocomplete/" + url_encode(title)) + " 2>/dev/null")
+    let id: string = jsonlite::unq(jsonlite::path(s, "data.0.id"))
+    if id == "" is return "" end
+    let g: string = shell("curl -fsSL --max-time 10 -H " + util::sq(auth) + " " + util::sq("https://www.steamgriddb.com/api/v2/grids/game/" + id + "?dimensions=600x900") + " 2>/dev/null")
+    let url: string = jsonlite::pstr(g, "data.0.url")
+    return cache_image(url, cache_key)
+end
+
+;; ProtonDB: ocena gry Steam ("platinum", "gold"...) lub ""
+pub fn protondb_tier(appid: string) -> string is
+    let r: string = util::http_get("https://www.protondb.com/api/v1/reports/summaries/" + appid + ".json", 8)
+    return jsonlite::gstr(r, "tier")
+end
+  
