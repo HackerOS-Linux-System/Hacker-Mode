@@ -1,0 +1,100 @@
+mod util
+mod jsonlite
+mod model
+
+fn store_path() -> string is
+    return util::data_dir() + "/hacker-mode/playtime.json"
+end
+
+fn sessions_path() -> string is
+    return util::data_dir() + "/hacker-mode/sessions.tsv"
+end
+
+fn load_doc() -> string is
+    let raw: string = util::read(store_path())
+    let t: string = string_trim(raw)
+    if string_len(t) < 2 || string_at(t, 0) != "{" is return "{}" end
+    return t
+end
+
+;; minuty zapisane dla klucza `platform:id` (-1 = brak wpisu)
+pub fn minutes_in(doc: string, key: string) -> int is
+    let raw: string = jsonlite::get(doc, key)
+    if raw == "" is return -1 end
+    if string_at(string_trim(raw), 0) == "{" is return jsonlite::gint(raw, "minutes") end
+    return jsonlite::to_int(raw)
+end
+
+pub fn last_played_in(doc: string, key: string) -> int is
+    let raw: string = jsonlite::get(doc, key)
+    if raw == "" || string_at(string_trim(raw), 0) != "{" is return 0 end
+    return jsonlite::gint(raw, "last_played_at")
+end
+
+pub fn get_minutes(platform: string, id: string) -> int is
+    return minutes_in(load_doc(), model::key_of(platform, id))
+end
+
+pub fn add_minutes(platform: string, id: string, minutes: int) is
+    let key: string = model::key_of(platform, id)
+    let doc: string = load_doc()
+    let cur: int = minutes_in(doc, key)
+    let total: int = (if cur < 0 then 0 else cur) + minutes
+    let entry: string = "{\"minutes\":" + to_string(total) + ",\"last_played_at\":" + to_string(now_unix()) + "}"
+    util::write_atomic(store_path(), jsonlite::pretty(jsonlite::set(doc, key, entry), 0) + "\n", "")
+    if minutes > 0 is
+        util::append_line(sessions_path(), key + "\t" + to_string(now_unix() - minutes * 60) + "\t" + to_string(minutes))
+    end
+end
+
+;; dopisuje lokalny czas gry do gier, które nie mają czasu z API sklepu
+pub fn merge_into(games: [model::Game]) is
+    let doc: string = load_doc()
+    if doc == "{}" is return end
+    let mut i: int = 0
+    while i < array_len(games) is
+        if games[i].playtime < 0 is
+            let m: int = minutes_in(doc, model::key(games[i]))
+            if m >= 0 is games[i].playtime = m end
+        end
+        i += 1
+    end
+end
+
+;; ostatnie sesje danej gry (najnowsze pierwsze), każda "unix|minuty"
+pub fn recent_sessions(key: string, limit: int) -> [string] is
+    let all: [string] = util::lines(util::read(sessions_path()))
+    let mut out: [string] = []
+    let mut i: int = array_len(all) - 1
+    while i >= 0 && array_len(out) < limit is
+        let p: [string] = string_split(all[i], "\t")
+        if array_len(p) >= 3 && p[0] == key is
+            out = array_push(out, p[1] + "|" + p[2])
+        end
+        i -= 1
+    end
+    return out
+end
+
+;; wszystkie klucze z czasem gry, posortowane malejąco po ostatnim uruchomieniu
+pub fn recently_played(limit: int) -> [string] is
+    let doc: string = load_doc()
+    let ks: [string] = jsonlite::keys(doc)
+    let mut pairs: [string] = []
+    let mut i: int = 0
+    while i < array_len(ks) is
+        let lp: int = last_played_in(doc, ks[i])
+        if lp > 0 is
+            pairs = array_push(pairs, util::pad_left(to_string(lp), 12, "0") + "|" + ks[i])
+        end
+        i += 1
+    end
+    let sorted: [string] = sort_strings(pairs)
+    let mut out: [string] = []
+    let mut j: int = array_len(sorted) - 1
+    while j >= 0 && array_len(out) < limit is
+        out = array_push(out, util::after(sorted[j], "|"))
+        j -= 1
+    end
+    return out
+end
