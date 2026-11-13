@@ -1,0 +1,118 @@
+mod util
+mod jsonlite
+mod settings
+
+pub fn active(s: settings::Settings) -> string is
+    let e: string = string_lower(env_get("HACKER_MODE_COMPOSITOR"))
+    if e == "labwc" || e == "comphwde" is return e end
+    return settings::compositor(s)
+end
+
+pub fn socket_path() -> string is
+    let rt: string = env_get("XDG_RUNTIME_DIR")
+    if rt != "" is return rt + "/sde/comphwde-hacker-mode.sock" end
+    return "/tmp/sde-" + util::sh("id -u") + "/comphwde-hacker-mode.sock"
+end
+
+;; Jedno żądanie IPC; zwraca surową odpowiedź (linię JSON) albo "".
+pub fn call(method: string, params: string) -> string is
+    let sock: string = socket_path()
+    if !util::exists(sock) is return "" end
+    let req: string = "{\"id\":1,\"method\":" + jsonlite::quote(method) + (if params == "" then "" else ",\"params\":" + params) + "}"
+    if util::have("socat") is
+        return shell("printf '%s\\n' " + util::sq(req) + " | timeout 2 socat -t1 - UNIX-CONNECT:" + util::sq(sock) + " 2>/dev/null | head -n 1")
+    end
+    if util::have("nc") is
+        return shell("printf '%s\\n' " + util::sq(req) + " | timeout 2 nc -U -w 1 " + util::sq(sock) + " 2>/dev/null | head -n 1")
+    end
+    return ""
+end
+
+pub fn ok_response(r: string) -> bool is
+    return jsonlite::gstr(r, "status") == "ok"
+end
+
+;; identyfikatory okien znanych kompozytorowi
+pub fn window_ids() -> [string] is
+    let r: string = call("list_windows", "")
+    let rows: [string] = jsonlite::items(jsonlite::path(r, "result.data"))
+    let mut out: [string] = []
+    let mut i: int = 0
+    while i < array_len(rows) is
+        out = array_push(out, jsonlite::unq(jsonlite::get(rows[i], "id")))
+        i += 1
+    end
+    return out
+end
+
+pub fn snapshot(s: settings::Settings) -> [string] is
+    if active(s) == "comphwde" is return window_ids() end
+    return []
+end
+
+;; Czeka do `timeout_s` na nowe okno (spoza `known`) i je maksymalizuje (tryb wrapper dla comphwde).
+pub fn maximize_new_window(s: settings::Settings, known: [string], timeout_s: int) -> string is
+    if active(s) != "comphwde" is return "" end
+    let mut waited: int = 0
+    while waited < timeout_s * 3 is
+        let ids: [string] = window_ids()
+        let mut i: int = 0
+        while i < array_len(ids) is
+            if !util::has(known, ids[i]) is
+                call("maximize_window", "{\"id\":" + ids[i] + ",\"maximized\":true}")
+                return ids[i]
+            end
+            i += 1
+        end
+        sleep_ms(300)
+        waited += 1
+    end
+    return ""
+end
+
+;; Pierwsze okno o danym tytule (do minimalizacji własnego okna w trybie wrapper).
+pub fn find_window(title_part: string) -> string is
+    let r: string = call("list_windows", "")
+    let rows: [string] = jsonlite::items(jsonlite::path(r, "result.data"))
+    let mut i: int = 0
+    while i < array_len(rows) is
+        if string_contains(jsonlite::gstr(rows[i], "title"), title_part) || string_contains(jsonlite::gstr(rows[i], "app_id"), "hacker-mode") is
+            return jsonlite::unq(jsonlite::get(rows[i], "id"))
+        end
+        i += 1
+    end
+    return ""
+end
+
+pub fn enter_wrapper(s: settings::Settings) is
+    if active(s) != "comphwde" is return end
+    let id: string = find_window("Hacker Mode")
+    if id != "" is call("minimize_window", "{\"id\":" + id + "}") end
+end
+
+pub fn exit_wrapper(s: settings::Settings) is
+    if active(s) != "comphwde" is return end
+    let id: string = find_window("Hacker Mode")
+    if id != "" is
+        call("unminimize_window", "{\"id\":" + id + "}")
+        call("focus_window", "{\"id\":" + id + "}")
+    end
+end
+
+pub fn shutdown_session(s: settings::Settings) is
+    if active(s) == "comphwde" is
+        call("shutdown", "")
+    else is
+        util::rc("labwc --exit")
+    end
+end
+
+pub fn ping() -> bool is
+    return ok_response(call("ping", ""))
+end
+
+;; polecenie `launch_app` — kompozytor uruchamia powłokę jako własny proces
+pub fn launch_app(command: string, args: [string]) -> bool is
+    let params: string = "{\"command\":" + jsonlite::quote(command) + ",\"args\":" + jsonlite::str_array(args) + "}"
+    return ok_response(call("launch_app", params))
+end
