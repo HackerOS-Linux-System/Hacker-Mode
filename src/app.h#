@@ -1,0 +1,516 @@
+mod util
+mod ui
+mod model
+mod state
+mod settings
+mod stores
+mod jobs
+mod launcher
+mod roblox
+mod covers
+mod playtime
+mod sysctl
+mod compositor
+mod doctor
+mod cloud_saves
+mod screens
+mod gfx
+
+;; ── pomocnicze ───────────────────────────────────────────────────────────────
+
+fn sorted_games(games: [model::Game]) -> [model::Game] is
+    let mut keys: [string] = []
+    let mut i: int = 0
+    while i < array_len(games) is
+        keys = array_push(keys, (if games[i].installed then "0" else "1") + string_lower(games[i].title) + "\t" + to_string(i))
+        i += 1
+    end
+    let sorted: [string] = sort_strings(keys)
+    let mut out: [model::Game] = []
+    let mut j: int = 0
+    while j < array_len(sorted) is
+        out = array_push(out, games[str_to_int(util::after(sorted[j], "\t"))])
+        j += 1
+    end
+    return out
+end
+
+fn push_view(a: state::App) is
+    gfx::draw_now(a.win, screens::render(a))
+end
+
+fn self_exe() -> string is
+    return util::sh("readlink -f /proc/self/exe")
+end
+
+fn refresh_library(a: state::App, with_covers: bool) is
+    a.busy = ui::tr(a.lang, "Wczytuję bibliotekę…")
+    push_view(a)
+    let mut games: [model::Game] = stores::list_all(a.s)
+    ;; okładki z sieci (Steam CDN, Roblox) pobieramy po zbudowaniu listy — pierwszy widok pokazujemy od razu
+    if with_covers is
+        let mut i: int = 0
+        while i < array_len(games) is
+            let ov: string = settings::cover_override(a.s, model::key(games[i]))
+            if ov != "" is
+                games[i].cover = covers::local_or_cached(ov, model::key(games[i]))
+            elsif string_starts_with(games[i].cover, "http") is
+                games[i].cover = covers::local_or_cached(games[i].cover, model::key(games[i]))
+            end
+            i += 1
+        end
+    end
+    a.games = sorted_games(games)
+    a.loaded = true
+    a.busy = ""
+end
+
+fn find_job(a: state::App, id: string) -> int is
+    let mut i: int = 0
+    while i < array_len(a.jobs) is
+        if a.jobs[i].id == id is return i end
+        i += 1
+    end
+    return -1
+end
+
+fn add_job(a: state::App, j: jobs::Job) -> bool is
+    if j.pid < 0 && j.done is
+        state::say(a, j.last_line)
+        return false
+    end
+    a.jobs = array_push(a.jobs, j)
+    return true
+end
+
+;; zadania w tle: odpytanie i obsługa zakończenia
+fn poll_jobs(a: state::App) -> bool is
+    let mut changed: bool = false
+    let mut keep: [jobs::Job] = []
+    let mut i: int = 0
+    while i < array_len(a.jobs) is
+        let j: jobs::Job = a.jobs[i]
+        let was: bool = j.done
+        let pct: int = j.percent
+        jobs::poll(j)
+        if j.percent != pct is changed = true end
+        if j.done && !was is
+            changed = true
+            if j.kind == "game" is
+                state::say(a, launcher::finish_game(a.s, j, a.dev))
+            elsif j.kind == "install" is
+                if j.ok is stores::on_install_finished(j.platform, j.game_id, j.title) end
+                state::say(a, if j.ok then "Zainstalowano: " + j.title else "Instalacja nie powiodła się: " + j.title)
+                refresh_library(a, false)
+            elsif j.kind == "uninstall" is
+                if j.ok is stores::on_uninstall_finished(j.platform, j.game_id) end
+                state::say(a, if j.ok then "Usunięto: " + j.title else "Usuwanie nie powiodło się: " + j.title)
+                refresh_library(a, false)
+            elsif j.kind == "login" is
+                state::say(a, if j.ok then "Zalogowano: " + j.title else "Logowanie nie powiodło się: " + j.title)
+                refresh_library(a, true)
+            end
+            if j.kind == "game" && j.ok is sysctl::notify("Hacker Mode", j.title) end
+        end
+        if !j.done is keep = array_push(keep, j) end
+        i += 1
+    end
+    a.jobs = keep
+    return changed
+end
+
+;; ── obsługa zdarzeń ──────────────────────────────────────────────────────────
+
+fn start_play(a: state::App, g: model::Game) is
+    if g.id == "" is return end
+    add_job(a, launcher::launch(a.s, g, a.dev))
+end
+
+fn rb_select(a: state::App, place: string) is
+    a.rb_sel = place
+    if place == "" is return end
+    let universe: string = roblox::universe_of(place)
+    let mut found: bool = false
+    if universe != "" is
+        let d: [roblox::Info] = roblox::details([universe], true)
+        if array_len(d) > 0 is
+            a.rb_info = d[0]
+            found = true
+        end
+    end
+    if !found is
+        let mut e: roblox::Info = roblox::empty_info()
+        e.place = place
+        e.name = "Roblox " + place
+        a.rb_info = e
+    end
+end
+
+fn rb_play(a: state::App, place: string) is
+    let mut g: model::Game = model::new_game("roblox", place, a.rb_info.name)
+    g.installed = true
+    if !roblox::sober_installed() && settings::get_str(a.s, "roblox_command", "") == "" is
+        state::say(a, "Najpierw zainstaluj Sober (karta „Klient Roblox”).")
+        return
+    end
+    start_play(a, g)
+end
+
+fn do_power(a: state::App, action: string) is
+    if a.dev is
+        state::say(a, "Tryb dev: pominięto akcję zasilania (" + action + ").")
+        return
+    end
+    if action == "sleep" is sysctl::sleep() end
+    if action == "restart" is sysctl::restart() end
+    if action == "shutdown" is sysctl::shutdown() end
+end
+
+fn handle_confirm(a: state::App, yes: bool) is
+    let c: string = a.confirm
+    a.confirm = ""
+    if !yes is return end
+    let kind: string = util::before(c, ":")
+    let arg: string = util::after(c, ":")
+    if kind == "uninstall" is
+        let g: model::Game = state::find_game(a, arg)
+        if g.platform == "roblox" is
+            roblox::unpin(g.id)
+            refresh_library(a, false)
+            a.selected = ""
+        else is
+            add_job(a, launcher::uninstall(a.s, g))
+        end
+    end
+    if kind == "unpin" is
+        roblox::unpin(arg)
+        a.rb_sel = ""
+        refresh_library(a, false)
+    end
+    if kind == "power" is do_power(a, arg) end
+    if kind == "exit" is
+        a.quit = true
+    end
+end
+
+fn set_keys(a: state::App) is
+    if a.input_steam != "" is settings::set_str(a.s, "steam_api_key", string_trim(a.input_steam)) end
+    if a.input_steamid != "" is settings::set_str(a.s, "steam_id64", string_trim(a.input_steamid)) end
+    if a.input_sgdb != "" is settings::set_str(a.s, "steamgriddb_api_key", string_trim(a.input_sgdb)) end
+    state::say(a, "Zapisano klucze.")
+    refresh_library(a, true)
+end
+
+fn toggle_tool(a: state::App, tool: string) is
+    let path: string = "gaming_tools." + tool
+    let dflt: bool = tool == "mangohud"
+    settings::set_bool(a.s, path, !settings::get_bool(a.s, path, dflt))
+end
+
+;; Zwraca true, gdy widok trzeba odświeżyć.
+fn handle(a: state::App, id: string, text: string) -> bool is
+    if id == "" is return false end
+    if string_starts_with(id, "tab:") is
+        a.tab = util::after(id, "tab:")
+        if a.tab == "doctor" && array_len(a.doctor) == 0 is a.doctor = doctor::run() end
+        if a.tab == "roblox" && !a.loaded is refresh_library(a, true) end
+        return true
+    end
+    if string_starts_with(id, "filter:") is
+        a.filter = util::after(id, "filter:")
+        a.page = 0
+        return true
+    end
+    if id == "search" is
+        a.query = text
+        a.page = 0
+        return true
+    end
+    if id == "more" is
+        a.page += 1
+        return true
+    end
+    if string_starts_with(id, "sel:") is
+        a.selected = util::after(id, "sel:")
+        return true
+    end
+    if id == "refresh" is
+        refresh_library(a, true)
+        state::say(a, "Biblioteka odświeżona (" + to_string(array_len(a.games)) + ").")
+        return true
+    end
+    if id == "exit" is
+        a.confirm = "exit:"
+        return true
+    end
+    if string_starts_with(id, "play:") is
+        start_play(a, state::find_game(a, util::after(id, "play:")))
+        return true
+    end
+    if string_starts_with(id, "install:") is
+        add_job(a, launcher::install(a.s, state::find_game(a, util::after(id, "install:"))))
+        return true
+    end
+    if string_starts_with(id, "uninstall:") is
+        a.confirm = "uninstall:" + util::after(id, "uninstall:")
+        return true
+    end
+    if id == "confirm:yes" is
+        handle_confirm(a, true)
+        return true
+    end
+    if id == "confirm:no" is
+        handle_confirm(a, false)
+        return true
+    end
+    if string_starts_with(id, "job:stop:") is
+        let k: int = find_job(a, util::after(id, "job:stop:"))
+        if k >= 0 is jobs::stop(a.jobs[k]) end
+        return true
+    end
+    if string_starts_with(id, "backup:") is
+        let err: string = cloud_saves::backup(a.s, util::after(id, "backup:"))
+        state::say(a, if err == "" then "Kopia zapisów utworzona." else err)
+        return true
+    end
+    if string_starts_with(id, "restore:") is
+        let err2: string = cloud_saves::restore_latest(a.s, util::after(id, "restore:"))
+        state::say(a, if err2 == "" then "Zapisy przywrócone." else err2)
+        return true
+    end
+    if string_starts_with(id, "login:") is
+        let plat: string = util::after(id, "login:")
+        let j: jobs::Job = jobs::start("login", plat, "", model::label(plat), self_exe() + " login " + plat, "")
+        add_job(a, j)
+        return true
+    end
+
+    ;; ── Roblox ──
+    if string_starts_with(id, "rb:mode:") is
+        a.rb_mode = util::after(id, "rb:mode:")
+        a.rb_sel = ""
+        return true
+    end
+    if id == "rb:q" is
+        a.rb_query = text
+        return false
+    end
+    if id == "rb:link" is
+        a.rb_link = text
+        return false
+    end
+    if id == "rb:user" is
+        a.rb_user = text
+        return false
+    end
+    if string_starts_with(id, "rb:chip:") is
+        a.rb_query = util::after(id, "rb:chip:")
+        a.rb_mode = "search"
+        a.busy = "Szukam…"
+        push_view(a)
+        a.rb_results = roblox::search(a.rb_query, 20)
+        a.busy = ""
+        return true
+    end
+    if id == "rb:search" is
+        if string_trim(a.rb_query) == "" is return false end
+        a.busy = "Szukam…"
+        push_view(a)
+        a.rb_results = roblox::search(a.rb_query, 20)
+        a.busy = ""
+        if array_len(a.rb_results) == 0 is state::say(a, "Brak wyników (albo brak połączenia).") end
+        return true
+    end
+    if string_starts_with(id, "rb:sel:") is
+        rb_select(a, util::after(id, "rb:sel:"))
+        return true
+    end
+    if string_starts_with(id, "rb:play:") is
+        rb_play(a, util::after(id, "rb:play:"))
+        return true
+    end
+    if string_starts_with(id, "rb:pin:") is
+        roblox::pin(a.rb_info.place, a.rb_info.universe, a.rb_info.name)
+        state::say(a, "Dodano do biblioteki: " + a.rb_info.name)
+        refresh_library(a, true)
+        return true
+    end
+    if string_starts_with(id, "rb:unpin:") is
+        a.confirm = "unpin:" + util::after(id, "rb:unpin:")
+        return true
+    end
+    if id == "rb:add" is
+        a.busy = "Dodaję…"
+        push_view(a)
+        let r: string = roblox::add_from_input(a.rb_link)
+        a.busy = ""
+        if string_starts_with(r, "ok:") is
+            state::say(a, "Dodano: " + util::after(r, "ok:"))
+            a.rb_link = ""
+            refresh_library(a, true)
+        else is
+            state::say(a, r)
+        end
+        return true
+    end
+    if id == "rb:import" is
+        if string_trim(a.rb_user) == "" is return false end
+        a.busy = "Importuję…"
+        push_view(a)
+        let n: int = roblox::import_favorites(a.rb_user)
+        a.busy = ""
+        if n < 0 is
+            state::say(a, "Nie znaleziono użytkownika albo brak połączenia.")
+        else is
+            state::say(a, "Zaimportowano ulubione: " + to_string(n))
+            refresh_library(a, true)
+        end
+        return true
+    end
+    if id == "rb:install" is
+        add_job(a, jobs::start("client", "roblox", "", "Sober", roblox::install_client_command(), ""))
+        return true
+    end
+    if string_starts_with(id, "rb:flag:") is
+        let key: string = util::after(id, "rb:flag:")
+        roblox::set_sober_flag(key, !roblox::sober_flag(key, false))
+        return true
+    end
+
+    ;; ── ustawienia i system ──
+    if string_starts_with(id, "set:lang:") is
+        a.lang = util::after(id, "set:lang:")
+        settings::set_str(a.s, "language", a.lang)
+        return true
+    end
+    if string_starts_with(id, "set:theme:") is
+        let th: string = util::after(id, "set:theme:")
+        settings::set_str(a.s, "theme", th)
+        a.theme_changed = th
+        return true
+    end
+    if id == "set:wrapper" is
+        settings::set_bool(a.s, "wrapper_mode_enabled", !settings::wrapper_mode(a.s))
+        return true
+    end
+    if string_starts_with(id, "set:tool:") is
+        toggle_tool(a, util::after(id, "set:tool:"))
+        return true
+    end
+    if string_starts_with(id, "set:plat:") is
+        let slug: string = util::after(id, "set:plat:")
+        settings::set_platform_enabled(a.s, slug, !settings::platform_enabled(a.s, slug))
+        refresh_library(a, true)
+        return true
+    end
+    if id == "in:steamkey" is
+        a.input_steam = text
+        return false
+    end
+    if id == "in:steamid" is
+        a.input_steamid = text
+        return false
+    end
+    if id == "in:sgdb" is
+        a.input_sgdb = text
+        return false
+    end
+    if id == "set:keys" is
+        set_keys(a)
+        return true
+    end
+    if string_starts_with(id, "sys:") is
+        let op: string = util::after(id, "sys:")
+        let mut r: sysctl::Action = sysctl::ok()
+        if op == "vol+" is r = sysctl::audio_up() end
+        if op == "vol-" is r = sysctl::audio_down() end
+        if op == "mute" is r = sysctl::audio_mute() end
+        if op == "bri+" is r = sysctl::brightness_up() end
+        if op == "bri-" is r = sysctl::brightness_down() end
+        if op == "wifi" is r = sysctl::wifi_toggle() end
+        if string_starts_with(op, "profile:") is r = sysctl::power_profile(util::after(op, "profile:")) end
+        if !r.ok is state::say(a, r.msg) end
+        a.volume = sysctl::audio_level()
+        return true
+    end
+    if string_starts_with(id, "power:") is
+        a.confirm = "power:" + util::after(id, "power:")
+        return true
+    end
+    if id == "doctor:run" is
+        a.doctor = doctor::run()
+        return true
+    end
+    return false
+end
+
+fn parse_event(line: string) -> [string] is
+    let i: int = string_find(line, "\t")
+    if i < 0 is return [line, ""] end
+    return [string_slice(line, 0, i), string_slice(line, i + 1, string_len(line))]
+end
+
+;; ── pętla zdarzeń ────────────────────────────────────────────────────────────
+
+;; jedna porcja pracy: zdarzenie okna (albo "" = tylko tyknięcie zegara); zwraca, czy trzeba przerysować
+fn step(a: state::App, line: string, last_poll: int) -> bool is
+    let mut dirty: bool = false
+    if line != "" is
+        let ev: [string] = parse_event(line)
+        if handle(a, ev[0], ev[1]) is dirty = true end
+    end
+    let now: int = now_ms()
+    if now - last_poll >= 700 is
+        if poll_jobs(a) is dirty = true end
+        if a.toast != "" && now_unix() > a.toast_until is
+            a.toast = ""
+            dirty = true
+        end
+    end
+    return dirty
+end
+
+;; Uruchamia powłokę: okno gui + pętla logiki w jednym wątku (gui nie wymaga wątku roboczego — API biblioteki jest wołane wprost).
+pub fn run(a: state::App) -> int is
+    util::mkdirp(util::cache_dir() + "/hacker-mode")
+    let w: gfx::Win = a.win
+    ;; pierwszy widok od razu (ekran „Wczytuję…” rysuje refresh_library), potem normalna pętla
+    refresh_library(a, true)
+    a.volume = sysctl::audio_level()
+    a.battery = sysctl::battery()
+    let mut view: string = screens::render(a)
+    let mut last_poll: int = 0
+    while gfx::running(w) is
+        let evs: [string] = gfx::frame(w, view)
+        let mut dirty: bool = false
+        let mut i: int = 0
+        while i < array_len(evs) is
+            if step(a, evs[i], last_poll) is dirty = true end
+            i += 1
+        end
+        let now: int = now_ms()
+        if now - last_poll >= 700 is
+            if step(a, "", last_poll) is dirty = true end
+            last_poll = now
+        end
+        if a.theme_changed != "" is
+            gfx::set_theme(w, a.theme_changed)
+            a.theme_changed = ""
+        end
+        if a.quit is
+            gfx::quit(w)
+            a.quit = false
+        end
+        if dirty is view = screens::render(a) end
+    end
+    ;; okno zamknięte: dokończ zapisy czasu gry zadań, które jeszcze trwają
+    let mut j: int = 0
+    while j < array_len(a.jobs) is
+        if a.jobs[j].kind == "game" && !a.jobs[j].done is
+            let mins: int = jobs::minutes_ran(a.jobs[j])
+            if mins >= 1 is playtime::add_minutes(a.jobs[j].platform, a.jobs[j].game_id, mins) end
+        end
+        j += 1
+    end
+    return 0
+end
