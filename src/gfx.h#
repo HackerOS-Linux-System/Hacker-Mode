@@ -1,0 +1,220 @@
+use "hlib -> gui"
+
+mod util
+mod ui
+
+pub struct Win is
+    pub app:     App
+    pub pending: [string]     ;; zdarzenia zebrane podczas rysowania w trakcie operacji blokującej
+end
+
+struct Cur is
+    pub lines: [string]
+    pub pos:   int
+end
+
+pub fn open(title: string, w: int, h: int, theme: string, css: string) -> Win is
+    let app = app_new(title, w, h)
+    App_set_theme(app, theme_by_name(theme))
+    App_set_css(app, css)
+    App_set_key_nav(app, true)
+    App_set_tick(app, 400)
+    return Win { app: app, pending: [] }
+end
+
+pub fn set_theme(w: Win, name: string) is
+    App_set_theme(w.app, theme_by_name(name))
+end
+
+pub fn running(w: Win) -> bool is
+    return App_running(w.app)
+end
+
+pub fn quit(w: Win) is
+    App_quit(w.app)
+end
+
+;; ── tekst → Element ──────────────────────────────────────────────────────────
+
+fn length_of(v: string) -> Length is
+    if v == "fill" is return fill() end
+    if v == "shrink" is return shrink() end
+    if string_starts_with(v, "px:") is return fixed(parse_f(util::after(v, "px:"))) end
+    if string_starts_with(v, "portion:") is return portion(parse_f(util::after(v, "portion:"))) end
+    return fixed(parse_f(v))
+end
+
+fn on(v: string) -> bool is
+    return v == "1" || v == "true"
+end
+
+fn attr_of(f: [string], key: string, dflt: string) -> string is
+    let mut i: int = 3
+    while i < array_len(f) is
+        if string_starts_with(f[i], key + "=") is return ui::dec(util::after(f[i], "=")) end
+        i += 1
+    end
+    return dflt
+end
+
+;; jedna para k=v zastosowana do elementu
+fn apply(e: Element, k: string, v: string) -> Element is
+    if k == "class" is return Element_class(e, v) end
+    if k == "id" is return Element_id(e, v) end
+    if k == "press" is return Element_on_press(e, v) end
+    if k == "toggle" is return Element_on_toggle(e, v) end
+    if k == "input" is return Element_on_input(e, v) end
+    if k == "submit" is return Element_on_submit(e, v) end
+    if k == "change" is return Element_on_change(e, v) end
+    if k == "select" is return Element_on_select(e, v) end
+    if k == "dismiss" is return Element_on_dismiss(e, v) end
+    if k == "w" is return Element_width(e, length_of(v)) end
+    if k == "h" is return Element_height(e, length_of(v)) end
+    if k == "wh" is return Element_size_px(e, parse_f(util::before(v, ",")), parse_f(util::after(v, ","))) end
+    if k == "fillw" is if on(v) is return Element_fill_width(e) end end
+    if k == "fillh" is if on(v) is return Element_fill_height(e) end end
+    if k == "filla" is
+        if on(v) is return Element_fill_height(Element_fill_width(e)) end
+    end
+    if k == "pad" is return Element_padding(e, parse_f(v)) end
+    if k == "padxy" is return Element_padding_xy(e, parse_f(util::before(v, ",")), parse_f(util::after(v, ","))) end
+    if k == "spacing" is return Element_spacing(e, parse_f(v)) end
+    if k == "ax" is return Element_align_x(e, str_to_int(v)) end
+    if k == "ay" is return Element_align_y(e, str_to_int(v)) end
+    if k == "center" is if on(v) is return Element_center(e) end end
+    if k == "centerx" is if on(v) is return Element_center_x(e) end end
+    if k == "size" is return Element_size(e, parse_f(v)) end
+    if k == "bold" is if on(v) is return Element_bold(e) end end
+    if k == "lsp" is return Element_letter_spacing(e, parse_f(v)) end
+    if k == "nowrap" is if on(v) is return Element_no_wrap(e) end end
+    if k == "fg" is return Element_color(e, parse_color(v)) end
+    if k == "bg" is return Element_background(e, parse_color(v)) end
+    if k == "grad" is
+        let p: [string] = string_split(v, ",")
+        if array_len(p) >= 3 is return Element_gradient(e, parse_color(p[0]), parse_color(p[1]), parse_f(p[2])) end
+    end
+    if k == "radius" is return Element_radius(e, parse_f(v)) end
+    if k == "opacity" is return Element_opacity(e, parse_f(v)) end
+    if k == "clip" is if on(v) is return Element_clip(e) end end
+    if k == "disabled" is return Element_disabled(e, on(v)) end
+    if k == "secret" is if on(v) is return Element_secret(e) end end
+    if k == "fit" is return Element_fit(e, str_to_int(v)) end
+    if k == "icon" is return Element_with_icon(e, v) end
+    if k == "maxw" is return Element_max_width(e, parse_f(v)) end
+    if k == "focusable" is if on(v) is return Element_focusable(e) end end
+    if k == "glass" is return Element_glass(e, parse_f(v)) end
+    return e
+end
+
+;; dziecko jedynaczne: jeden element wprost, w innym wypadku opakowany w kolumnę
+fn one(kids: List_Element) -> Element is
+    if List_Element_len(kids) == 1 is return List_Element_get(kids, 0) end
+    if List_Element_len(kids) == 0 is return space() end
+    return column(kids)
+end
+
+fn make(kind: string, arg: string, f: [string], kids: List_Element) -> Element is
+    if kind == "text" is return text(arg) end
+    if kind == "icon" is return icon(arg) end
+    if kind == "button" is return button(arg) end
+    if kind == "badge" is
+        let col: string = attr_of(f, "fg", "")
+        if col != "" is return container(Element_color(text(arg), parse_color(col))) end
+        return badge(arg)
+    end
+    if kind == "image" is return image(arg) end
+    if kind == "progress" is return progress_bar(parse_f(attr_of(f, "lo", "0")), parse_f(attr_of(f, "hi", "100")), parse_f(attr_of(f, "v", "0"))) end
+    if kind == "slider" is return slider(parse_f(attr_of(f, "lo", "0")), parse_f(attr_of(f, "hi", "100")), parse_f(attr_of(f, "v", "0"))) end
+    if kind == "toggler" is return toggler(arg, on(attr_of(f, "on", "0"))) end
+    if kind == "checkbox" is return checkbox(arg, on(attr_of(f, "on", "0"))) end
+    if kind == "radio" is return radio(arg, on(attr_of(f, "on", "0"))) end
+    if kind == "text_input" is return text_input(arg, attr_of(f, "val", "")) end
+    if kind == "row" is return row(kids) end
+    if kind == "column" is return column(kids) end
+    if kind == "stack" is return stack(kids) end
+    if kind == "container" is return container(one(kids)) end
+    if kind == "scroll" is return scrollable(one(kids)) end
+    if kind == "scroll_x" is return scrollable_x(one(kids)) end
+    if kind == "button_with" is return button_with(one(kids)) end
+    if kind == "modal" is return modal(one(kids), on(attr_of(f, "open", "0"))) end
+    if kind == "drawer" is return drawer(one(kids), on(attr_of(f, "open", "0")), str_to_int(attr_of(f, "side", "1"))) end
+    if kind == "tooltip" is return tooltip(one(kids), arg) end
+    if kind == "rule" is return rule() end
+    return space()
+end
+
+;; atrybuty, które make() zużywa przy tworzeniu elementu — nie stosujemy ich drugi raz
+fn consumed(kind: string, k: string) -> bool is
+    if k == "on" || k == "open" || k == "side" is return true end
+    if k == "val" && kind == "text_input" is return true end
+    if (k == "lo" || k == "hi" || k == "v") && (kind == "progress" || kind == "slider") is return true end
+    if k == "fg" && kind == "badge" is return true end
+    return false
+end
+
+fn node(c: Cur) -> Element is
+    let f: [string] = string_split(c.lines[c.pos], "\t")
+    c.pos += 1
+    let d: int = str_to_int(f[0])
+    let kind: string = f[1]
+    let mut arg: string = ""
+    if array_len(f) > 2 is arg = ui::dec(f[2]) end
+    let kids = List_Element_new()
+    let mut go: bool = true
+    while go && c.pos < array_len(c.lines) is
+        let nf: [string] = string_split(c.lines[c.pos], "\t")
+        if str_to_int(nf[0]) > d is
+            List_Element_push(kids, node(c))
+        else is
+            go = false
+        end
+    end
+    let mut e: Element = make(kind, arg, f, kids)
+    let mut i: int = 3
+    while i < array_len(f) is
+        let k: string = util::before(f[i], "=")
+        if !consumed(kind, k) is
+            e = apply(e, k, ui::dec(util::after(f[i], "=")))
+        end
+        i += 1
+    end
+    return e
+end
+
+pub fn build(view: string) -> Element is
+    let c: Cur = Cur { lines: [], pos: 0 }
+    let all: [string] = string_split(view, "\n")
+    let mut i: int = 0
+    while i < array_len(all) is
+        if all[i] != "" is c.lines = array_push(c.lines, all[i]) end
+        i += 1
+    end
+    if array_len(c.lines) == 0 is return column(List_Element_new()) end
+    return node(c)
+end
+
+;; ── jedna klatka ─────────────────────────────────────────────────────────────
+
+;; rysuje `view`, zwraca zdarzenia jako linie „id TAB tekst” (pierwsze: te zebrane wcześniej)
+pub fn frame(w: Win, view: string) -> [string] is
+    let ms = App_frame1(w.app, build(view))
+    let mut out: [string] = w.pending
+    w.pending = []
+    let n: int = List_Message_len(ms)
+    let mut i: int = 0
+    while i < n is
+        let m = List_Message_get(ms, i)
+        let id: string = Message_get_id(m)
+        if id != "" && id != "focus" && id != "tick" is
+            out = array_push(out, id + "\t" + Message_get_text(m))
+        end
+        i += 1
+    end
+    return out
+end
+
+;; rysowanie w trakcie operacji blokującej (np. „Szukam…”): zdarzenia odkładamy na później
+pub fn draw_now(w: Win, view: string) is
+    let ev: [string] = frame(w, view)
+    w.pending = ev
+end
