@@ -1,0 +1,88 @@
+mod util
+
+pub struct Game is
+    pub platform:  string   ;; steam | epic | gog | amazon | lutris | ea | battlenet | roblox
+    pub id:        string
+    pub title:     string
+    pub installed: bool
+    pub path:      string   ;; katalog instalacji ("" = nieznany)
+    pub cover:     string   ;; lokalny plik albo URL ("" = brak)
+    pub playtime:  int      ;; minuty; -1 = nieznany
+    pub extra:     string   ;; dane specyficzne dla platformy (Roblox: universeId)
+end
+
+pub fn new_game(platform: string, id: string, title: string) -> Game is
+    return Game { platform: platform, id: id, title: title, installed: false, path: "", cover: "", playtime: -1, extra: "" }
+end
+
+pub fn key(g: Game) -> string is
+    return g.platform + ":" + g.id
+end
+
+pub fn key_of(platform: string, id: string) -> string is
+    return platform + ":" + id
+end
+
+pub fn all_platforms() -> [string] is
+    return ["steam", "epic", "gog", "amazon", "lutris", "ea", "battlenet", "roblox"]
+end
+
+pub fn label(slug: string) -> string is
+    if slug == "steam" is return "Steam" end
+    if slug == "epic" is return "Epic Games" end
+    if slug == "gog" is return "GOG" end
+    if slug == "amazon" is return "Amazon Games" end
+    if slug == "lutris" is return "Lutris" end
+    if slug == "ea" is return "EA app" end
+    if slug == "battlenet" is return "Battle.net" end
+    if slug == "roblox" is return "Roblox" end
+    return slug
+end
+
+;; ikona Lucide (z biblioteki gui) dla platformy
+pub fn icon(slug: string) -> string is
+    if slug == "steam" is return "monitor" end
+    if slug == "epic" is return "star" end
+    if slug == "gog" is return "heart" end
+    if slug == "amazon" is return "globe" end
+    if slug == "lutris" is return "layout-grid" end
+    if slug == "ea" is return "play" end
+    if slug == "battlenet" is return "terminal" end
+    if slug == "roblox" is return "layout-grid" end
+    return "folder"
+end
+
+;; kolor akcentu platformy (#rrggbb)
+pub fn accent(slug: string) -> string is
+    if slug == "steam" is return "#66c0f4" end
+    if slug == "epic" is return "#b4bcd0" end
+    if slug == "gog" is return "#c084fc" end
+    if slug == "amazon" is return "#ffb454" end
+    if slug == "lutris" is return "#fb923c" end
+    if slug == "ea" is return "#ff6b6b" end
+    if slug == "battlenet" is return "#4ea1ff" end
+    if slug == "roblox" is return "#ff5a5f" end
+    return "#89b4fa"
+end
+
+;; Zserializowanie gry do jednej linii TSV (cache biblioteki) i z powrotem.
+pub fn to_line(g: Game) -> string is
+    return util::tsv_esc(g.platform) + "\t" + util::tsv_esc(g.id) + "\t" + util::tsv_esc(g.title) + "\t" +
+        (if g.installed then "1" else "0") + "\t" + util::tsv_esc(g.path) + "\t" + util::tsv_esc(g.cover) + "\t" +
+        to_string(g.playtime) + "\t" + util::tsv_esc(g.extra)
+end
+
+pub fn from_line(line: string) -> Game is
+    let p: [string] = string_split(line, "\t")
+    let mut g: Game = new_game("", "", "")
+    if array_len(p) < 8 is return g end
+    g.platform = util::tsv_unesc(p[0])
+    g.id = util::tsv_unesc(p[1])
+    g.title = util::tsv_unesc(p[2])
+    g.installed = p[3] == "1"
+    g.path = util::tsv_unesc(p[4])
+    g.cover = util::tsv_unesc(p[5])
+    g.playtime = str_to_int(p[6])
+    g.extra = util::tsv_unesc(p[7])
+    return g
+end
