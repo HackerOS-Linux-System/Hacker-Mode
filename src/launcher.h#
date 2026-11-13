@@ -1,0 +1,91 @@
+mod util
+mod model
+mod settings
+mod stores
+mod jobs
+mod roblox
+mod compositor
+mod playtime
+
+;; Owija polecenie: kontroler (SDL), MangoHud / vkBasalt (zmienne), gamescope, prefiks użytkownika.
+pub fn wrap(s: settings::Settings, platform: string, game_key: string, cmd: string) -> string is
+    if platform == "roblox" is return cmd end
+    let mut inner: string = cmd
+    if settings::get_bool(s, "gaming_tools.gamescope", false) is inner = "gamescope -- " + inner end
+    let prefix: string = string_trim(settings::get_str(s, "custom_launch_prefix", ""))
+    if prefix != "" is inner = prefix + " " + inner end
+    let mut envs: string = ""
+    if settings::get_bool(s, "gaming_tools.mangohud", true) is envs = envs + " MANGOHUD=1" end
+    if settings::get_bool(s, "gaming_tools.vkbasalt", false) is envs = envs + " ENABLE_VKBASALT=1" end
+    let pad: string = settings::ctrl_config(s, game_key)
+    if pad != "" is envs = envs + " SDL_GAMECONTROLLERCONFIG=" + util::sq(pad) end
+    return "env XDG_SESSION_TYPE=wayland" + envs + " " + inner
+end
+
+;; Uruchamia grę. Zwraca zadanie albo zadanie z pid < 0 i komunikatem w last_line.
+pub fn launch(s: settings::Settings, g: model::Game, dev: bool) -> jobs::Job is
+    let base: string = stores::launch_command(s, g.platform, g.id)
+    if string_starts_with(base, "!") is
+        let mut bad: jobs::Job = jobs::start("game", g.platform, g.id, g.title, "false", "")
+        bad.pid = -1
+        bad.done = true
+        bad.last_line = string_slice(base, 1, string_len(base))
+        return bad
+    end
+    let cmd: string = wrap(s, g.platform, model::key(g), base)
+    let watch: string = if g.platform == "steam" then "steam" else (if g.platform == "roblox" then "roblox" else "")
+    let wrapper: bool = settings::wrapper_mode(s) && !dev
+    if wrapper is compositor::enter_wrapper(s) end
+    let j: jobs::Job = jobs::start("game", g.platform, g.id, g.title, cmd, watch)
+    util::log("start gry " + model::key(g) + ": " + cmd)
+    return j
+end
+
+pub fn install(s: settings::Settings, g: model::Game) -> jobs::Job is
+    let cmd: string = stores::install_command(s, g.platform, g.id)
+    if string_starts_with(cmd, "!") is
+        let mut bad: jobs::Job = jobs::start("install", g.platform, g.id, g.title, "false", "")
+        bad.pid = -1
+        bad.done = true
+        bad.last_line = string_slice(cmd, 1, string_len(cmd))
+        return bad
+    end
+    return jobs::start("install", g.platform, g.id, g.title, cmd, "")
+end
+
+pub fn uninstall(s: settings::Settings, g: model::Game) -> jobs::Job is
+    let cmd: string = stores::uninstall_command(s, g.platform, g.id)
+    if string_starts_with(cmd, "!") is
+        let mut bad: jobs::Job = jobs::start("uninstall", g.platform, g.id, g.title, "false", "")
+        bad.pid = -1
+        bad.done = true
+        bad.last_line = string_slice(cmd, 1, string_len(cmd))
+        return bad
+    end
+    return jobs::start("uninstall", g.platform, g.id, g.title, cmd, "")
+end
+
+pub fn open_client(s: settings::Settings, platform: string) -> jobs::Job is
+    let cmd: string = stores::client_command(s, platform)
+    if cmd == "" is
+        let mut bad: jobs::Job = jobs::start("client", platform, "", model::label(platform), "false", "")
+        bad.pid = -1
+        bad.done = true
+        bad.last_line = "Ta platforma nie ma osobnego klienta."
+        return bad
+    end
+    return jobs::start("client", platform, "", model::label(platform), cmd, "")
+end
+
+;; Zamknięcie zadania gry: czas gry, wyjście z trybu wrapper, powiadomienie. Zwraca komunikat statusu.
+pub fn finish_game(s: settings::Settings, j: jobs::Job, dev: bool) -> string is
+    let mins: int = jobs::minutes_ran(j)
+    if mins >= 1 is playtime::add_minutes(j.platform, j.game_id, mins) end
+    if settings::wrapper_mode(s) && !dev is compositor::exit_wrapper(s) end
+    let threshold: int = settings::get_int(s, "crash_detection_threshold_seconds", 8)
+    let elapsed: int = now_unix() - j.started
+    if !j.ok && elapsed < threshold && j.watch == "" is
+        return "„" + j.title + "” zakończyła się natychmiast — możliwy błąd uruchomienia."
+    end
+    return "„" + j.title + "” zakończona (" + util::fmt_minutes(mins) + ")."
+end
