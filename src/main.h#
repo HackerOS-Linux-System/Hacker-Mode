@@ -1,0 +1,182 @@
+mod util
+mod model
+mod settings
+mod stores
+mod roblox
+mod doctor
+mod compositor
+mod login
+mod state
+mod gfx
+mod ui
+mod app
+
+fn arg_at(args: [string], i: int) -> string is
+    if i < array_len(args) is return args[i] end
+    return ""
+end
+
+fn rest_from(args: [string], start: int) -> string is
+    let mut out: string = ""
+    let mut i: int = start
+    while i < array_len(args) is
+        if out != "" is out = out + " " end
+        out = out + args[i]
+        i += 1
+    end
+    return out
+end
+
+fn help() is
+    println("Hacker Mode — powłoka konsoli do gier (H# + gui + webview)")
+    println("")
+    println("  hacker-mode                  uruchom powłokę")
+    println("  hacker-mode --dev            tryb deweloperski (zwykły pulpit)")
+    println("  hacker-mode login <sklep>    epic | gog | amazon")
+    println("  hacker-mode doctor           diagnostyka")
+    println("  hacker-mode list             biblioteka w terminalu")
+    println("  hacker-mode roblox search <fraza> | add <link|id> | launch <id> | import <użytkownik> | doctor")
+    println("  hacker-mode bnet versions <kod produktu>")
+    println("  hacker-mode ipc ping | shutdown | launch <polecenie> [args…]   (comphwde)")
+end
+
+fn cmd_list(s: settings::Settings) is
+    let games: [model::Game] = stores::list_all(s)
+    let mut i: int = 0
+    while i < array_len(games) is
+        let g: model::Game = games[i]
+        println(util::pad_right_str(model::label(g.platform), 12) + (if g.installed then "● " else "○ ") + g.title + "  [" + g.id + "]")
+        i += 1
+    end
+    println(to_string(array_len(games)) + " gier")
+end
+
+fn cmd_roblox(s: settings::Settings, args: [string]) -> int is
+    let sub: string = arg_at(args, 2)
+    let rest: string = rest_from(args, 3)
+    if sub == "search" is
+        let found: [roblox::Info] = roblox::search(rest, 10)
+        let mut i: int = 0
+        while i < array_len(found) is
+            println(found[i].place + "  " + found[i].name + "  (" + to_string(found[i].playing) + " online)")
+            i += 1
+        end
+        if array_len(found) == 0 is println("brak wyników") end
+        return 0
+    end
+    if sub == "add" is
+        let r: string = roblox::add_from_input(rest)
+        if string_starts_with(r, "ok:") is
+            println("dodano: " + util::after(r, "ok:"))
+            return 0
+        end
+        println(r)
+        return 1
+    end
+    if sub == "import" is
+        let n: int = roblox::import_favorites(rest)
+        if n < 0 is
+            println("nie znaleziono użytkownika")
+            return 1
+        end
+        println("zaimportowano: " + to_string(n))
+        return 0
+    end
+    if sub == "launch" is
+        let pi: [string] = roblox::parse_input(rest)
+        if pi[0] == "" is
+            println("podaj numer miejsca albo link")
+            return 1
+        end
+        let cmd: string = roblox::open_command(s, pi[0], pi[1])
+        println(cmd)
+        return util::rc(cmd)
+    end
+    if sub == "doctor" is
+        let rows: [string] = roblox::doctor()
+        let mut i: int = 0
+        while i < array_len(rows) is
+            let p: [string] = string_split(rows[i], "|")
+            println((if p[1] == "1" then "✓ " else "✗ ") + p[0] + (if p[1] == "1" then "" else "   → " + p[2]))
+            i += 1
+        end
+        return 0
+    end
+    help()
+    return 1
+end
+
+;; Ribbit (protokół wersji Blizzarda, TCP 1119) przez nc — bez zewnętrznych bibliotek
+fn cmd_bnet(args: [string]) -> int is
+    if arg_at(args, 2) != "versions" || arg_at(args, 3) == "" is
+        help()
+        return 1
+    end
+    let code: string = arg_at(args, 3)
+    if !util::have("nc") is
+        println("brak polecenia nc")
+        return 1
+    end
+    let out: string = shell("printf 'v1/products/%s/versions\\r\\n' " + util::sq(code) + " | timeout 8 nc us.version.battle.net 1119")
+    println(out)
+    return 0
+end
+
+fn main() is
+    let args: [string] = env::args()
+    let cmd: string = arg_at(args, 1)
+    let s: settings::Settings = settings::load()
+
+    if cmd == "help" || cmd == "--help" || cmd == "-h" is
+        help()
+        return
+    end
+    if cmd == "version" || cmd == "--version" is
+        println("hacker-mode 0.4.0 (H#)")
+        return
+    end
+    if cmd == "login" is
+        let rc: int = login::run(arg_at(args, 2))
+        return
+    end
+    if cmd == "doctor" is
+        println(string_trim(doctor::report()))
+        return
+    end
+    if cmd == "list" is
+        cmd_list(s)
+        return
+    end
+    if cmd == "roblox" is
+        let rc2: int = cmd_roblox(s, args)
+        return
+    end
+    if cmd == "ipc" is
+        ;; zamiennik `hacker-mode-ipcctl`: drukuje "ok" albo "error: …" (kod wyjścia ustawia skrypt hacker-mode-ipcctl)
+        let sub: string = arg_at(args, 2)
+        let mut good: bool = false
+        if sub == "ping" is good = compositor::ping() end
+        if sub == "shutdown" is good = compositor::ok_response(compositor::call("shutdown", "")) end
+        if sub == "launch" && arg_at(args, 3) != "" is
+            let mut rest_args: [string] = []
+            let mut k: int = 4
+            while k < array_len(args) is
+                rest_args = array_push(rest_args, args[k])
+                k += 1
+            end
+            good = compositor::launch_app(args[3], rest_args)
+        end
+        println(if good then "ok" else "error: comphwde niedostępne albo żądanie odrzucone")
+        return
+    end
+    if cmd == "bnet" is
+        let rc3: int = cmd_bnet(args)
+        return
+    end
+
+    let dev: bool = cmd == "--dev" || cmd == "dev" || env_get("HACKER_MODE_DEV") != ""
+    let win: gfx::Win = gfx::open("Hacker Mode", 1280, 800, settings::theme(s), ui::css())
+    let a: state::App = state::new_app(s, dev, win)
+    let rc4: int = app::run(a)
+    util::log("zakończono, kod " + to_string(rc4))
+end
