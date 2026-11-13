@@ -1,0 +1,169 @@
+mod util
+
+pub struct View is
+    pub out:   string
+    pub depth: int
+end
+
+pub fn view() -> View is
+    return View { out: "", depth: 0 }
+end
+
+;; kodowanie pól: % → %25, tab → %09, nowa linia → %0A
+pub fn enc(s: string) -> string is
+    let a: string = string_replace(s, "%", "%25")
+    let b: string = string_replace(a, "\t", "%09")
+    return string_replace(b, "\n", "%0A")
+end
+
+pub fn dec(s: string) -> string is
+    let a: string = string_replace(s, "%09", "\t")
+    let b: string = string_replace(a, "%0A", "\n")
+    return string_replace(b, "%25", "%")
+end
+
+;; atrybut `k=v` (poprzedzony tabulatorem)
+pub fn a(k: string, v: string) -> string is
+    return "\t" + k + "=" + enc(v)
+end
+
+fn emit(v: View, kind: string, arg: string, attrs: string) is
+    v.out = v.out + to_string(v.depth) + "\t" + kind + "\t" + enc(arg) + attrs + "\n"
+end
+
+;; element z dziećmi: po `open` wołaj `close`
+pub fn open(v: View, kind: string, arg: string, attrs: string) is
+    emit(v, kind, arg, attrs)
+    v.depth += 1
+end
+
+pub fn close(v: View) is
+    v.depth -= 1
+end
+
+pub fn leaf(v: View, kind: string, arg: string, attrs: string) is
+    emit(v, kind, arg, attrs)
+end
+
+;; ── skróty ───────────────────────────────────────────────────────────────────
+
+pub fn gap(v: View, px: int) is
+    emit(v, "space", "", a("w", "px:" + to_string(px)) + a("h", to_string(px)))
+end
+
+pub fn grow(v: View) is
+    emit(v, "space", "", a("w", "fill"))
+end
+
+pub fn label(v: View, s: string, cls: string) is
+    emit(v, "text", s, a("class", cls))
+end
+
+pub fn title(v: View, s: string, size: int) is
+    emit(v, "text", s, a("size", to_string(size)) + a("bold", "1"))
+end
+
+;; przycisk tekstowy; id → zdarzenie, class: primary | danger | success | ghost
+pub fn btn(v: View, text: string, id: string, cls: string, icon: string) is
+    let mut at: string = a("press", id) + a("class", cls)
+    if icon != "" is at = at + a("icon", icon) end
+    emit(v, "button", text, at)
+end
+
+pub fn btn_off(v: View, text: string, cls: string, icon: string) is
+    let mut at: string = a("class", cls) + a("disabled", "1")
+    if icon != "" is at = at + a("icon", icon) end
+    emit(v, "button", text, at)
+end
+
+;; chip filtrów
+pub fn chip(v: View, text: string, id: string, active: bool) is
+    emit(v, "button", text, a("press", id) + a("class", if active then "chip chip-on" else "chip"))
+end
+
+;; ── tłumaczenia (klucze to polskie teksty) ───────────────────────────────────
+
+pub fn tr(lang: string, pl: string) -> string is
+    if lang != "en" is return pl end
+    if pl == "Biblioteka" is return "Library" end
+    if pl == "Roblox" is return "Roblox" end
+    if pl == "Ustawienia" is return "Settings" end
+    if pl == "Diagnostyka" is return "Diagnostics" end
+    if pl == "Wszystkie" is return "All" end
+    if pl == "Szukaj gier…" is return "Search games…" end
+    if pl == "Graj" is return "Play" end
+    if pl == "Zainstaluj" is return "Install" end
+    if pl == "Odinstaluj" is return "Uninstall" end
+    if pl == "Zatrzymaj" is return "Stop" end
+    if pl == "Odśwież" is return "Refresh" end
+    if pl == "Zamknij" is return "Close" end
+    if pl == "Anuluj" is return "Cancel" end
+    if pl == "Tak, usuń" is return "Yes, remove" end
+    if pl == "Czas gry" is return "Playtime" end
+    if pl == "Ostatnio grane" is return "Recently played" end
+    if pl == "Brak gier" is return "No games" end
+    if pl == "Wczytuję bibliotekę…" is return "Loading library…" end
+    if pl == "Pokaż więcej" is return "Show more" end
+    if pl == "Zainstalowana" is return "Installed" end
+    if pl == "Nie zainstalowana" is return "Not installed" end
+    if pl == "Otwórz klienta" is return "Open client" end
+    if pl == "Zaloguj" is return "Sign in" end
+    if pl == "Moje doświadczenia" is return "My experiences" end
+    if pl == "Szukaj w Roblox" is return "Search Roblox" end
+    if pl == "Szukaj" is return "Search" end
+    if pl == "Dodaj do biblioteki" is return "Add to library" end
+    if pl == "Usuń z biblioteki" is return "Remove from library" end
+    if pl == "Dodaj po linku lub numerze miejsca" is return "Add by link or place ID" end
+    if pl == "Dodaj" is return "Add" end
+    if pl == "Import ulubionych (nazwa użytkownika)" is return "Import favorites (username)" end
+    if pl == "Importuj" is return "Import" end
+    if pl == "Graczy teraz" is return "Playing now" end
+    if pl == "Odwiedziny" is return "Visits" end
+    if pl == "Polubienia" is return "Likes" end
+    if pl == "Twórca" is return "Creator" end
+    if pl == "Klient Roblox (Sober)" is return "Roblox client (Sober)" end
+    if pl == "Zainstaluj Sober" is return "Install Sober" end
+    if pl == "Język" is return "Language" end
+    if pl == "Motyw" is return "Theme" end
+    if pl == "Tryb wrapper (ukryj powłokę podczas gry)" is return "Wrapper mode (hide shell while playing)" end
+    if pl == "Narzędzia gamingowe" is return "Gaming tools" end
+    if pl == "Platformy" is return "Platforms" end
+    if pl == "Dźwięk i jasność" is return "Sound and brightness" end
+    if pl == "Zasilanie" is return "Power" end
+    if pl == "Uśpij" is return "Sleep" end
+    if pl == "Restart" is return "Restart" end
+    if pl == "Wyłącz" is return "Shut down" end
+    if pl == "Wyjdź z powłoki" is return "Exit shell" end
+    if pl == "Klucz Steam API" is return "Steam API key" end
+    if pl == "SteamID64" is return "SteamID64" end
+    if pl == "Klucz SteamGridDB" is return "SteamGridDB key" end
+    if pl == "Zapisz" is return "Save" end
+    if pl == "Kopia zapisów" is return "Backup saves" end
+    if pl == "Przywróć zapisy" is return "Restore saves" end
+    if pl == "Uruchom diagnostykę" is return "Run diagnostics" end
+    return pl
+end
+
+;; ── arkusz stylów (podzbiór CSS z gui; działa na każdym motywie) ──────────────
+
+pub fn css() -> string is
+    return ".card { border-radius: 18px; box-shadow: 0 10px 28px rgba(0,0,0,0.38); }\n" +
+        ".panel { border-radius: 16px; }\n" +
+        "#topbar { backdrop-filter: blur(24px); }\n" +
+        "button { border-radius: 12px; padding: 10px 18px; }\n" +
+        "button.primary { background: linear-gradient(90deg, #7aa2f7, #bb9af7); color: #ffffff; border-radius: 999px; padding: 12px 28px; font-weight: 700; }\n" +
+        "button.primary:hover { box-shadow: 0 8px 22px rgba(122,162,247,0.45); }\n" +
+        "button.danger { border-radius: 999px; }\n" +
+        "button.ghost { background: rgba(255,255,255,0.06); }\n" +
+        "button.ghost:hover { background: rgba(255,255,255,0.14); }\n" +
+        "button.chip { border-radius: 999px; padding: 6px 16px; background: rgba(255,255,255,0.07); font-size: 14px; }\n" +
+        "button.chip-on { background: linear-gradient(90deg, #7aa2f7, #bb9af7); color: #ffffff; font-weight: 700; }\n" +
+        "button.tab { border-radius: 999px; padding: 10px 22px; background: rgba(255,255,255,0.0); font-weight: 600; }\n" +
+        "button.tab-on { background: rgba(255,255,255,0.14); }\n" +
+        "button.tile { padding: 0px; border-radius: 18px; background: rgba(255,255,255,0.05); box-shadow: 0 8px 22px rgba(0,0,0,0.35); }\n" +
+        "button.tile:hover { transform: scale(1.04); }\n" +
+        "button.tile:focus { transform: scale(1.07); box-shadow: 0 14px 34px rgba(122,162,247,0.5); }\n" +
+        ".badge { border-radius: 999px; padding: 3px 10px; font-size: 12px; }\n" +
+        ".toast { border-radius: 14px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); }\n" +
+        "text_input { border-radius: 12px; padding: 10px 14px; }\n"
+end
